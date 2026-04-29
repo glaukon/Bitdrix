@@ -1,0 +1,73 @@
+plugins {
+    id "com.android.application"
+    id "kotlin-android"
+    // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
+    id "dev.flutter.flutter-gradle-plugin"
+}
+
+def keystoreProperties = new Properties()
+def keystorePropertiesFile = rootProject.file("key.properties")
+if (keystorePropertiesFile.exists()) {
+    keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
+}
+
+android {
+    namespace = "com.bitdrix.bitdrix"
+    compileSdk = 36
+    ndkVersion = "27.0.12077973"
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    kotlinOptions {
+        jvmTarget = JavaVersion.VERSION_17
+    }
+
+    defaultConfig {
+        applicationId = "com.bitdrix.bitdrix"
+        minSdk = 28  // libtorrent4j requires API 28+
+        targetSdk = flutter.targetSdkVersion
+        versionCode = flutter.versionCode
+        versionName = flutter.versionName
+    }
+
+    signingConfigs {
+        release {
+            if (keystorePropertiesFile.exists()) {
+                keyAlias = keystoreProperties["keyAlias"]
+                keyPassword = keystoreProperties["keyPassword"]
+                storeFile = file(keystoreProperties["storeFile"])
+                storePassword = keystoreProperties["storePassword"]
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            signingConfig = keystorePropertiesFile.exists()
+                ? signingConfigs.release
+                : signingConfigs.debug
+            // Keep libtorrent4j SWIG JNI bridge methods that R8 would otherwise strip.
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'),
+                          'proguard-rules.pro'
+        }
+    }
+
+    packagingOptions {
+        pickFirst "**/libjlibtorrent.so"
+        pickFirst "**/libc++_shared.so"
+    }
+}
+
+flutter {
+    source = "../.."
+}
+
+dependencies {
+    // libtorrent4j — real BitTorrent engine for Android
+    // Add other ABIs (arm, x86, x86_64) for production builds
+    implementation "org.libtorrent4j:libtorrent4j-android-arm64:2.1.0-39"
+    implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3"
+}

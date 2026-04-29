@@ -1,0 +1,68 @@
+# Miscellaneous
+*.class
+*.log
+*.pyc
+*.swp
+.DS_Store
+.atom/
+.build/
+.buildlog/
+.history
+.svn/
+.swiftpm/
+migrate_working_dir/
+
+# IDE
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# VS Code (descomenta si no quieres subirlo)
+#.vscode/
+
+# Flutter / Dart
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.pub/
+.pub-cache/
+build/
+.metadata
+
+# Generated docs
+**/doc/api/
+
+# iOS
+**/ios/Flutter/.last_build_id
+
+# Android build artifacts
+/android/app/debug
+/android/app/profile
+/android/app/release
+
+# Symbolication / obfuscation
+app.*.symbols
+app.*.map.json
+
+# Claude local config
+.claude/
+
+# Custom local Gradle dirs
+.gradle-codex/
+.gradle-home/
+
+# Kotlin temp files
+android/.kotlin/
+*.salive
+
+# Secrets / environment
+.env
+.env.*
+!.env.example
+
+# Android secrets
+android/local.properties
+android/key.properties
+android/app/*.jks
+android/app/*.keystore

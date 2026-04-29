@@ -1,0 +1,49 @@
+name: bitdrix
+description: A modern torrent client with streaming support
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_riverpod: ^2.4.9
+  riverpod_annotation: ^2.3.3
+  go_router: ^12.1.3
+  media_kit: ^1.2.0
+  media_kit_video: ^2.0.1
+  media_kit_libs_video: ^1.0.6
+  file_picker: ^6.1.1
+  path_provider: ^2.1.2
+  permission_handler: ^11.1.0
+  shared_preferences: ^2.2.2
+  dio: ^5.4.0
+  freezed_annotation: ^2.4.1
+  json_annotation: ^4.8.1
+  uuid: ^4.3.3
+  intl: ^0.19.0
+  percent_indicator: ^4.2.3
+  flutter_svg: ^2.0.9
+  logger: ^2.4.0
+
+dependency_overrides:
+  media_kit_video:
+    path: third_party/media_kit_video
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+  mocktail: ^1.0.4
+  build_runner: ^2.4.7
+  freezed: ^2.4.6
+  json_serializable: ^6.7.1
+  riverpod_generator: ^2.3.9
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/icons/
+    - assets/images/
