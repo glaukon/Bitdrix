@@ -2,6 +2,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:material_ui/material_ui.dart';
 
 import '../../../core/theme/app_theme.dart';
+import '../../../core/utils/catalog_labels.dart';
 import '../../../core/utils/genre_labels.dart';
 import '../../../data/models/stremio_addon.dart';
 import '../../providers/addon_providers.dart';
@@ -10,8 +11,8 @@ import '../../widgets/horizontal_scroller.dart';
 import '../../widgets/selectable_chip.dart';
 import '../home/addons_section.dart';
 
-/// Live TV from the user's Stremio addons: one chip per TV catalog the
-/// installed addons offer, plus favourites.
+/// Live TV from the user's Stremio addons: a tab per addon (plus
+/// Favoritos), then that addon's catalogs and their categories.
 class TvScreen extends ConsumerStatefulWidget {
   const TvScreen({super.key});
 
@@ -22,21 +23,32 @@ class TvScreen extends ConsumerStatefulWidget {
 class _TvScreenState extends ConsumerState<TvScreen> {
   final _search = TextEditingController();
 
-  /// Selected catalog, by `manifestUrl|type|id`; null shows favourites.
-  String? _selected;
-  bool _initialized = false;
+  /// Selected addon tab, by manifest URL; null is the Favoritos tab.
+  String? _addonUrl;
+
+  /// Selected catalog of that addon, by `type|id`.
+  String? _catalogKey;
 
   /// Category of the selected catalog; null shows all of them.
   String? _genre;
 
-  static String _keyOf(AddonCatalog c) =>
-      '${c.addon.manifestUrl}|${c.catalog.type}|${c.catalog.id}';
+  bool _initialized = false;
+
+  static String _catalogKeyOf(StremioCatalog c) => '${c.type}|${c.id}';
 
   @override
   void dispose() {
     _search.dispose();
     super.dispose();
   }
+
+  void _selectAddon(String? url) => setState(() {
+        if (_addonUrl != url) {
+          _catalogKey = null;
+          _genre = null;
+        }
+        _addonUrl = url;
+      });
 
   @override
   Widget build(BuildContext context) {
@@ -50,17 +62,31 @@ class _TvScreenState extends ConsumerState<TvScreen> {
     final favorites = ref.watch(favoriteMetasProvider);
     if (catalogs.isEmpty) return const _NoTvAddons();
 
-    // First visit: favourites if any, else the first catalog.
-    if (!_initialized ||
-        (_selected != null && !catalogs.any((c) => _keyOf(c) == _selected))) {
-      _initialized = true;
-      _selected = favorites.isNotEmpty ? null : _keyOf(catalogs.first);
+    // Addons with TV catalogs, in install order, each with its catalogs.
+    final byAddon = <String, List<AddonCatalog>>{};
+    for (final c in catalogs) {
+      byAddon.putIfAbsent(c.addon.manifestUrl, () => []).add(c);
     }
-    final source = catalogs.where((c) => _keyOf(c) == _selected).firstOrNull;
+    final addons = [for (final list in byAddon.values) list.first.addon];
+
+    // First visit: favourites if any, else the first addon. A removed addon
+    // falls back the same way.
+    if (!_initialized ||
+        (_addonUrl != null && !byAddon.containsKey(_addonUrl))) {
+      _initialized = true;
+      _addonUrl = favorites.isNotEmpty ? null : addons.first.manifestUrl;
+      _catalogKey = null;
+      _genre = null;
+    }
+
+    final addonCatalogs = _addonUrl == null ? null : byAddon[_addonUrl]!;
+    final source = addonCatalogs == null
+        ? null
+        : addonCatalogs
+                .where((c) => _catalogKeyOf(c.catalog) == _catalogKey)
+                .firstOrNull ??
+            addonCatalogs.first;
     final query = _search.text.trim().toLowerCase();
-    // Several addons can name their catalogs alike: tell them apart.
-    final multipleAddons =
-        catalogs.map((c) => c.addon.manifestUrl).toSet().length > 1;
 
     return Column(
       children: [
@@ -84,42 +110,38 @@ class _TvScreenState extends ConsumerState<TvScreen> {
             ),
           ),
         ),
-        HorizontalScroller(
-          height: 60,
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
-          wheelScrollsSideways: true,
-          itemCount: catalogs.length + 1,
-          itemBuilder: (_, i) {
-            if (i == 0) {
+        _AddonTabs(
+          addons: addons,
+          selected: _addonUrl,
+          favoritesCount: favorites.length,
+          onSelected: _selectAddon,
+        ),
+        if (source != null && addonCatalogs!.length > 1)
+          HorizontalScroller(
+            height: 56,
+            padding: const EdgeInsets.fromLTRB(16, 10, 16, 6),
+            wheelScrollsSideways: true,
+            showScrollbar: false,
+            itemCount: addonCatalogs.length,
+            itemBuilder: (_, i) {
+              final c = addonCatalogs[i];
               return SelectableChip(
-                selected: _selected == null,
+                selected: identical(c, source),
                 onSelected: (_) => setState(() {
-                  _selected = null;
+                  _catalogKey = _catalogKeyOf(c.catalog);
                   _genre = null;
                 }),
-                avatar: const Icon(Icons.star_rounded, size: 18),
-                label: 'Favoritos (${favorites.length})',
+                label: catalogLabel(c.catalog.name, c.addon.name),
               );
-            }
-            final c = catalogs[i - 1];
-            return SelectableChip(
-              selected: _selected == _keyOf(c),
-              onSelected: (_) => setState(() {
-                if (_selected != _keyOf(c)) _genre = null;
-                _selected = _keyOf(c);
-              }),
-              label: multipleAddons
-                  ? '${c.catalog.name} · ${c.addon.name}'
-                  : c.catalog.name,
-            );
-          },
-        ),
+            },
+          ),
         if (source != null && source.catalog.filterGenres.isNotEmpty)
           _GenreBar(
             genres: source.catalog.filterGenres,
             selected: _genre,
             onSelected: (g) => setState(() => _genre = g),
           ),
+        const SizedBox(height: 4),
         Expanded(
           child: source == null
               ? _ChannelGrid(
@@ -145,6 +167,99 @@ class _TvScreenState extends ConsumerState<TvScreen> {
           : items.where((m) => m.name.toLowerCase().contains(query)).toList();
 }
 
+/// One tab per addon with TV catalogs, plus Favoritos at the end.
+class _AddonTabs extends StatelessWidget {
+  const _AddonTabs({
+    required this.addons,
+    required this.selected,
+    required this.favoritesCount,
+    required this.onSelected,
+  });
+
+  final List<StremioAddon> addons;
+
+  /// Manifest URL of the selected addon; null for Favoritos.
+  final String? selected;
+  final int favoritesCount;
+  final ValueChanged<String?> onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    final tabs = <({String? url, String label, Widget? icon})>[
+      for (final a in addons)
+        (
+          url: a.manifestUrl,
+          label: addonLabel(a.name),
+          icon: a.logoUrl == null
+              ? null
+              : ClipRRect(
+                  borderRadius: BorderRadius.circular(4),
+                  child: Image.network(
+                    a.logoUrl!,
+                    width: 18,
+                    height: 18,
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, _, _) => const SizedBox.shrink(),
+                  ),
+                ),
+        ),
+      (
+        url: null,
+        label: 'Favoritos ($favoritesCount)',
+        icon: const Icon(Icons.star_rounded, size: 18, color: Colors.amber),
+      ),
+    ];
+
+    return Container(
+      decoration: const BoxDecoration(
+        border: Border(bottom: BorderSide(color: Color(0xFF222233))),
+      ),
+      child: HorizontalScroller(
+        height: 48,
+        padding: const EdgeInsets.symmetric(horizontal: 8),
+        spacing: 0,
+        wheelScrollsSideways: true,
+        showScrollbar: false,
+        itemCount: tabs.length,
+        itemBuilder: (_, i) {
+          final tab = tabs[i];
+          final active = tab.url == selected;
+          return InkWell(
+            onTap: () => onSelected(tab.url),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              decoration: BoxDecoration(
+                border: Border(
+                  bottom: BorderSide(
+                    color: active ? AppTheme.primary : Colors.transparent,
+                    width: 3,
+                  ),
+                ),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (tab.icon != null) ...[tab.icon!, const SizedBox(width: 8)],
+                  Text(
+                    tab.label,
+                    style: TextStyle(
+                      color: active
+                          ? AppTheme.onBackground
+                          : AppTheme.onSurfaceVariant,
+                      fontSize: 15,
+                      fontWeight: active ? FontWeight.w700 : FontWeight.w500,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
 /// The categories of the selected catalog (Stremio's genre filter).
 class _GenreBar extends StatelessWidget {
   const _GenreBar({
@@ -160,8 +275,8 @@ class _GenreBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return HorizontalScroller(
-      height: 52,
-      padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+      height: 56,
+      padding: const EdgeInsets.fromLTRB(16, 10, 16, 6),
       wheelScrollsSideways: true,
       itemCount: genres.length + 1,
       itemBuilder: (_, i) => i == 0
@@ -241,17 +356,14 @@ class _ChannelGrid extends ConsumerWidget {
     }
     ref.watch(favoriteMetasProvider);
     final favorites = ref.read(favoriteMetasProvider.notifier);
+    final layout = channelLayoutFor(items);
     return GridView.builder(
       padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
       physics: const AlwaysScrollableScrollPhysics(),
-      gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-        maxCrossAxisExtent: 170,
-        childAspectRatio: 0.95,
-        crossAxisSpacing: 12,
-        mainAxisSpacing: 12,
-      ),
+      gridDelegate: channelGridDelegate(layout),
       itemCount: items.length,
       itemBuilder: (_, i) => ChannelCard(
+        layout: layout,
         meta: items[i],
         favorite: favorites.isFavorite(items[i]),
         onTap: () => openChannel(context, items[i]),

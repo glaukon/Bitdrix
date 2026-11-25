@@ -115,7 +115,11 @@ class TmdbService {
     final path = mediaType == 'tv' ? '/tv/$tmdbId' : '/movie/$tmdbId';
     final response = await _dio.get(
       path,
-      queryParameters: {'language': _language},
+      queryParameters: {
+        'language': _language,
+        // Cast and director in the same request.
+        'append_to_response': 'credits',
+      },
     );
     final json = response.data as Map<String, dynamic>;
     // Inject media_type so fromJson resolves the correct field names.

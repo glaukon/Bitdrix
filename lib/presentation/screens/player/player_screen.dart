@@ -1,11 +1,13 @@
 import 'dart:async';
 
 import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/gestures.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
+import 'package:go_router/go_router.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../../core/theme/app_theme.dart';
@@ -77,6 +79,132 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
 
   bool get _isStreamingMode => widget.torrentId != null;
 
+  // ── Keyboard, mouse and on-screen feedback ────────────────────────────────
+
+  static const _volumeKey = 'player_volume';
+  double _volume = 100;
+  double _volumeBeforeMute = 100;
+
+  /// Short message shown in the middle of the video ("Volumen 70 %").
+  String? _osdText;
+  IconData? _osdIcon;
+  Timer? _osdTimer;
+
+  void _showOsd(IconData icon, String text) {
+    _osdTimer?.cancel();
+    setState(() {
+      _osdIcon = icon;
+      _osdText = text;
+    });
+    _osdTimer = Timer(const Duration(milliseconds: 900), () {
+      if (mounted) setState(() => _osdText = null);
+    });
+  }
+
+  void _togglePlay() {
+    unawaited(_player.playOrPause());
+    final willPlay = !_player.state.playing;
+    _showOsd(willPlay ? Icons.play_arrow_rounded : Icons.pause_rounded,
+        willPlay ? 'Reproducir' : 'Pausa');
+    setState(() => _controlsVisible = true);
+    _scheduleHideControls();
+  }
+
+  Future<void> _setVolume(double value) async {
+    _volume = value.clamp(0, 100).roundToDouble();
+    await _player.setVolume(_volume);
+    _showOsd(
+      _volume == 0
+          ? Icons.volume_off_rounded
+          : _volume < 50
+              ? Icons.volume_down_rounded
+              : Icons.volume_up_rounded,
+      _volume == 0 ? 'Silencio' : 'Volumen ${_volume.round()} %',
+    );
+    unawaited((_prefs ?? await SharedPreferences.getInstance())
+        .setDouble(_volumeKey, _volume));
+  }
+
+  void _toggleMute() {
+    if (_volume > 0) {
+      _volumeBeforeMute = _volume;
+      unawaited(_setVolume(0));
+    } else {
+      unawaited(_setVolume(_volumeBeforeMute > 0 ? _volumeBeforeMute : 100));
+    }
+  }
+
+  void _seekBy(Duration offset) {
+    if (widget.isLive) return;
+    unawaited(_seekRelative(offset));
+    final seconds = offset.inSeconds;
+    _showOsd(
+      seconds < 0 ? Icons.fast_rewind_rounded : Icons.fast_forward_rounded,
+      '${seconds < 0 ? '−' : '+'}${seconds.abs() >= 60 ? '${seconds.abs() ~/ 60} min' : '${seconds.abs()} s'}',
+    );
+  }
+
+  /// Player shortcuts. Ignored while a menu or dialog is open on top.
+  bool _onKey(KeyEvent event) {
+    if (event is KeyUpEvent || !mounted) return false;
+    if (!(ModalRoute.of(context)?.isCurrent ?? false)) return false;
+    final key = event.logicalKey;
+    final repeat = event is KeyRepeatEvent;
+    final shift = HardwareKeyboard.instance.isShiftPressed;
+    final step = Duration(seconds: shift ? 60 : 10);
+
+    if (!repeat &&
+        (key == LogicalKeyboardKey.space ||
+            key == LogicalKeyboardKey.keyK ||
+            key == LogicalKeyboardKey.mediaPlayPause)) {
+      _togglePlay();
+    } else if (!repeat && key == LogicalKeyboardKey.mediaPlay) {
+      if (!_player.state.playing) _togglePlay();
+    } else if (!repeat &&
+        (key == LogicalKeyboardKey.mediaPause ||
+            key == LogicalKeyboardKey.mediaStop)) {
+      if (_player.state.playing) _togglePlay();
+    } else if (!repeat &&
+        (key == LogicalKeyboardKey.keyF || key == LogicalKeyboardKey.f11)) {
+      unawaited(_toggleFullscreen());
+    } else if (!repeat && key == LogicalKeyboardKey.escape) {
+      if (_isFullscreen) {
+        unawaited(_toggleFullscreen());
+      } else {
+        context.pop();
+      }
+    } else if (key == LogicalKeyboardKey.arrowLeft ||
+        key == LogicalKeyboardKey.keyJ) {
+      _seekBy(-step);
+    } else if (key == LogicalKeyboardKey.arrowRight ||
+        key == LogicalKeyboardKey.keyL) {
+      _seekBy(step);
+    } else if (key == LogicalKeyboardKey.arrowUp) {
+      unawaited(_setVolume(_volume + 5));
+    } else if (key == LogicalKeyboardKey.arrowDown) {
+      unawaited(_setVolume(_volume - 5));
+    } else if (!repeat && key == LogicalKeyboardKey.keyM) {
+      _toggleMute();
+    } else {
+      return false;
+    }
+    return true;
+  }
+
+  /// Mouse wheel over the video: volume.
+  void _onPointerSignal(PointerSignalEvent event) {
+    if (event is! PointerScrollEvent) return;
+    final dy = event.scrollDelta.dy;
+    if (dy == 0) return;
+    unawaited(_setVolume(_volume + (dy < 0 ? 5 : -5)));
+  }
+
+  /// Moving the mouse brings the controls (and the cursor) back.
+  void _onHover(PointerHoverEvent _) {
+    if (!_controlsVisible) setState(() => _controlsVisible = true);
+    _scheduleHideControls();
+  }
+
   /// Index into [_liveSources] of the stream being played.
   int _liveSourceIndex = 0;
   List<String> get _liveSources => [widget.filePath, ...widget.fallbackUrls];
@@ -104,6 +232,15 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
       ),
     );
     _videoController = VideoController(_player);
+    HardwareKeyboard.instance.addHandler(_onKey);
+    unawaited(SharedPreferences.getInstance().then((prefs) {
+      final saved = prefs.getDouble(_volumeKey);
+      if (saved != null && mounted) {
+        _volume = saved;
+        _volumeBeforeMute = saved > 0 ? saved : 100;
+        unawaited(_player.setVolume(saved));
+      }
+    }));
     _configureNetworkPlayback();
     _listenToPlayer();
     unawaited(SharedPreferences.getInstance().then((p) => _prefs = p));
@@ -291,6 +428,9 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
       subscription.cancel();
     }
     _hideControlsTimer?.cancel();
+    _osdTimer?.cancel();
+    HardwareKeyboard.instance.removeHandler(_onKey);
+    if (_isFullscreen) unawaited(defaultExitNativeFullscreen());
     try {
       _maybeSavePosition(_player.state.position, force: true);
     } catch (_) {}
@@ -326,19 +466,16 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     _scheduleHideControls();
   }
 
+  /// Real fullscreen: the native window on desktop (media_kit's helper),
+  /// immersive landscape on phones.
   Future<void> _toggleFullscreen() async {
-    if (_isFullscreen) {
-      await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
-      await SystemChrome.setPreferredOrientations(
-          [DeviceOrientation.portraitUp]);
+    final enter = !_isFullscreen;
+    setState(() => _isFullscreen = enter);
+    if (enter) {
+      await defaultEnterNativeFullscreen();
     } else {
-      await SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
-      await SystemChrome.setPreferredOrientations([
-        DeviceOrientation.landscapeLeft,
-        DeviceOrientation.landscapeRight,
-      ]);
+      await defaultExitNativeFullscreen();
     }
-    setState(() => _isFullscreen = !_isFullscreen);
   }
 
   @override
@@ -373,21 +510,39 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
 
     return Scaffold(
       backgroundColor: Colors.black,
-      body: GestureDetector(
-        onTap: _toggleControls,
-        behavior: HitTestBehavior.opaque,
-        child: Stack(
-          fit: StackFit.expand,
-          children: [
-            _buildVideo(),
-            if (waiting)
-              _buildBufferingOverlay(
-                torrent: torrent,
-                file: selectedFile,
-                hasStream: streamUrl != null,
-              ),
-            if (_controlsVisible || _error != null) _buildControlsOverlay(),
-          ],
+      body: Listener(
+        onPointerSignal: _onPointerSignal,
+        child: MouseRegion(
+          // The cursor hides with the controls while watching.
+          cursor: _controlsVisible || _error != null
+              ? MouseCursor.defer
+              : SystemMouseCursors.none,
+          onHover: _onHover,
+          child: GestureDetector(
+            onTap: _toggleControls,
+            onDoubleTap: _toggleFullscreen,
+            behavior: HitTestBehavior.opaque,
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                _buildVideo(),
+                if (waiting)
+                  _buildBufferingOverlay(
+                    torrent: torrent,
+                    file: selectedFile,
+                    hasStream: streamUrl != null,
+                  ),
+                if (_controlsVisible || _error != null)
+                  _buildControlsOverlay(),
+                if (_osdText != null)
+                  IgnorePointer(
+                    child: Center(
+                      child: _Osd(icon: _osdIcon!, text: _osdText!),
+                    ),
+                  ),
+              ],
+            ),
+          ),
         ),
       ),
     );
@@ -790,6 +945,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   Widget _buildTransportControls() {
     if (widget.isLive) {
       return _ControlIconButton(
+        tooltip: 'Pausa / reproducir (Espacio)',
         icon: _player.state.playing
             ? Icons.pause_circle_filled_rounded
             : Icons.play_circle_filled_rounded,
@@ -807,11 +963,13 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
           _ControlIconButton(
+            tooltip: 'Atrás 10 s (←)',
             icon: Icons.replay_10_rounded,
             onPressed: () => _seekRelative(const Duration(seconds: -10)),
           ),
           const SizedBox(width: 16),
           _ControlIconButton(
+            tooltip: 'Pausa / reproducir (Espacio)',
             icon: _player.state.playing
                 ? Icons.pause_circle_filled_rounded
                 : Icons.play_circle_filled_rounded,
@@ -824,6 +982,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
           ),
           const SizedBox(width: 16),
           _ControlIconButton(
+            tooltip: 'Adelante 10 s (→)',
             icon: Icons.forward_10_rounded,
             onPressed: () => _seekRelative(const Duration(seconds: 10)),
           ),
@@ -945,6 +1104,9 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                   ),
                 ),
                 IconButton(
+                  tooltip: _isFullscreen
+                      ? 'Salir de pantalla completa (F o Esc)'
+                      : 'Pantalla completa (F o doble clic)',
                   icon: Icon(
                     _isFullscreen
                         ? Icons.fullscreen_exit_rounded
@@ -988,15 +1150,18 @@ class _ControlIconButton extends StatelessWidget {
     required this.icon,
     required this.onPressed,
     this.size = 40,
+    this.tooltip,
   });
 
   final IconData icon;
   final VoidCallback onPressed;
   final double size;
+  final String? tooltip;
 
   @override
   Widget build(BuildContext context) {
     return IconButton(
+      tooltip: tooltip,
       icon: Icon(icon, color: Colors.white, size: size),
       onPressed: onPressed,
       padding: EdgeInsets.zero,
@@ -1066,6 +1231,40 @@ class _LiveBadge extends StatelessWidget {
               fontSize: 12,
               fontWeight: FontWeight.w800,
               letterSpacing: 0.8,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// The brief feedback in the middle of the video (volume, seek, pause).
+class _Osd extends StatelessWidget {
+  const _Osd({required this.icon, required this.text});
+
+  final IconData icon;
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+      decoration: BoxDecoration(
+        color: Colors.black.withAlpha(170),
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, color: Colors.white, size: 30),
+          const SizedBox(width: 12),
+          Text(
+            text,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 18,
+              fontWeight: FontWeight.w700,
             ),
           ),
         ],

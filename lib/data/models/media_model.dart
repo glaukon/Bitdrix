@@ -15,6 +15,10 @@ class MediaModel {
     this.status,
     this.numberOfSeasons,
     this.genres = const [],
+    this.runtimeMinutes,
+    this.tagline,
+    this.cast = const [],
+    this.directors = const [],
   });
 
   final int id;
@@ -44,6 +48,18 @@ class MediaModel {
   /// Genre names, e.g. ["Action", "Drama"].
   final List<String> genres;
 
+  // Only in full details (`getDetails`, with credits).
+
+  /// Movie length, or a typical episode length for TV.
+  final int? runtimeMinutes;
+  final String? tagline;
+
+  /// Main cast, in billing order.
+  final List<CastMember> cast;
+
+  /// Directors for movies, creators for TV shows.
+  final List<String> directors;
+
   // ── Getters ──────────────────────────────────────────────────────────────────
 
   String? get posterUrl {
@@ -58,6 +74,29 @@ class MediaModel {
 
   /// The display title (same as [title] — kept for API symmetry).
   String get displayTitle => title;
+
+  /// "1 h 52 min", or null when unknown.
+  String? get displayRuntime {
+    final m = runtimeMinutes;
+    if (m == null || m <= 0) return null;
+    if (m < 60) return '$m min';
+    return m % 60 == 0 ? '${m ~/ 60} h' : '${m ~/ 60} h ${m % 60} min';
+  }
+
+  /// [status] in Castilian. TMDB sends it in English whatever the language.
+  String? get displayStatus => switch (status) {
+        null || '' => null,
+        'Returning Series' => 'En emisión',
+        'Ended' => 'Finalizada',
+        'Canceled' || 'Cancelled' => 'Cancelada',
+        'In Production' => 'En producción',
+        'Planned' => 'Anunciada',
+        'Pilot' => 'Piloto',
+        'Released' => null, // Obvious for a movie with a year.
+        'Post Production' => 'Postproducción',
+        'Rumored' => 'Rumoreada',
+        _ => status,
+      };
 
   /// Four-digit year string extracted from [releaseDate], or `null`.
   String? get displayYear {
@@ -94,7 +133,45 @@ class MediaModel {
             .toList() ??
         [];
 
+    final credits = json['credits'];
+    final castJson = credits is Map<String, dynamic>
+        ? credits['cast'] as List<dynamic>? ?? const []
+        : const [];
+    final crewJson = credits is Map<String, dynamic>
+        ? credits['crew'] as List<dynamic>? ?? const []
+        : const [];
+    final runtimes = json['episode_run_time'];
+
     return MediaModel(
+      runtimeMinutes: (json['runtime'] as num?)?.toInt() ??
+          (runtimes is List && runtimes.isNotEmpty
+              ? (runtimes.first as num?)?.toInt()
+              : null),
+      tagline: (json['tagline'] as String?)?.trim().isNotEmpty == true
+          ? (json['tagline'] as String).trim()
+          : null,
+      cast: [
+        for (final c in castJson.take(20))
+          if (c is Map<String, dynamic> && c['name'] is String)
+            CastMember(
+              name: c['name'] as String,
+              character: c['character'] as String?,
+              profilePath: c['profile_path'] as String?,
+            ),
+      ],
+      directors: isTV
+          ? [
+              for (final c in json['created_by'] as List<dynamic>? ?? [])
+                if (c is Map<String, dynamic> && c['name'] is String)
+                  c['name'] as String,
+            ]
+          : [
+              for (final c in crewJson)
+                if (c is Map<String, dynamic> &&
+                    c['job'] == 'Director' &&
+                    c['name'] is String)
+                  c['name'] as String,
+            ],
       id: (json['id'] as num).toInt(),
       title: titleRaw,
       overview: json['overview'] as String?,
@@ -157,6 +234,23 @@ class MediaModel {
       status: status ?? this.status,
       numberOfSeasons: numberOfSeasons ?? this.numberOfSeasons,
       genres: genres ?? this.genres,
+      runtimeMinutes: runtimeMinutes,
+      tagline: tagline,
+      cast: cast,
+      directors: directors,
     );
   }
+}
+
+/// An actor in a title's cast.
+class CastMember {
+  const CastMember({required this.name, this.character, this.profilePath});
+
+  final String name;
+  final String? character;
+  final String? profilePath;
+
+  String? get photoUrl => profilePath == null
+      ? null
+      : '${TmdbConstants.imageBaseUrl}/w185$profilePath';
 }

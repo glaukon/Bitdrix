@@ -1,3 +1,4 @@
+import 'package:bitdrix/core/utils/catalog_labels.dart';
 import 'package:bitdrix/core/utils/genre_labels.dart';
 import 'package:bitdrix/data/models/stremio_addon.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -108,5 +109,15 @@ void main() {
       genres: ['Tutti', 'Sport', 'sport', 'News'],
     );
     expect(c.filterGenres, ['Sport', 'News']);
+  });
+
+  test('names addons and catalogs briefly, in Castilian', () {
+    expect(addonLabel('TvVoo | ElfHosted'), 'TvVoo');
+    expect(addonLabel('StremVerse'), 'StremVerse');
+    expect(catalogLabel('TvVoo • Spain', 'TvVoo | ElfHosted'), 'España');
+    expect(catalogLabel('Live Events', 'StremVerse'), 'Eventos en directo');
+    expect(catalogLabel('Replays', 'StremVerse'), 'Repeticiones');
+    expect(catalogLabel('StremVerse IPTV', 'StremVerse'), 'IPTV');
+    expect(catalogLabel('StremVerse', 'StremVerse'), 'StremVerse');
   });
 }

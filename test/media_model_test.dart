@@ -31,4 +31,44 @@ void main() {
     expect(back.title, 'Matrix');
     expect(back.releaseDate, '1999-03-30');
   });
+
+  test('reads runtime, tagline, cast and director from full details', () {
+    final movie = MediaModel.fromJson({
+      'id': 1,
+      'media_type': 'movie',
+      'title': 'X',
+      'runtime': 112,
+      'tagline': '  Una familia, dos bodas  ',
+      'credits': {
+        'cast': [
+          {'name': 'Ben Stiller', 'character': 'Greg', 'profile_path': '/b.jpg'},
+        ],
+        'crew': [
+          {'name': 'John Hamburg', 'job': 'Director'},
+          {'name': 'Otra', 'job': 'Producer'},
+        ],
+      },
+    });
+    expect(movie.displayRuntime, '1 h 52 min');
+    expect(movie.tagline, 'Una familia, dos bodas');
+    expect(movie.cast.single.name, 'Ben Stiller');
+    expect(movie.cast.single.photoUrl, endsWith('/w185/b.jpg'));
+    expect(movie.directors, ['John Hamburg']);
+  });
+
+  test('shows TV status and creators in Castilian', () {
+    final show = MediaModel.fromJson({
+      'id': 2,
+      'media_type': 'tv',
+      'name': 'Y',
+      'status': 'Returning Series',
+      'episode_run_time': [45],
+      'created_by': [
+        {'name': 'Creadora'},
+      ],
+    });
+    expect(show.displayStatus, 'En emisión');
+    expect(show.displayRuntime, '45 min');
+    expect(show.directors, ['Creadora']);
+  });
 }

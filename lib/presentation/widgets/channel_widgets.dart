@@ -148,6 +148,67 @@ class _StreamsSheetState extends ConsumerState<_StreamsSheet> {
   }
 }
 
+/// How a channel tile draws its picture.
+enum ChannelCardLayout {
+  /// A channel logo, centred and contained in a square-ish tile.
+  logo,
+
+  /// A portrait poster (event or show art) filling the tile, 2:3.
+  poster,
+
+  /// A wide 16:9 picture filling the tile.
+  landscape,
+}
+
+/// The layout that suits most of [items], from the `posterShape` the addon
+/// declares: event art comes as posters or landscape stills, channels as
+/// square logos.
+ChannelCardLayout channelLayoutFor(List<StremioMeta> items) {
+  if (items.isEmpty) return ChannelCardLayout.logo;
+  var poster = 0;
+  var landscape = 0;
+  // The shape the addon declares decides (TvVoo: "square" channel logos).
+  for (final m in items) {
+    if (m.posterUrl == null) continue;
+    if (m.posterShape == 'landscape') {
+      landscape++;
+    } else if (m.posterShape != 'square') {
+      poster++;
+    }
+  }
+  if (landscape * 2 > items.length) return ChannelCardLayout.landscape;
+  if (poster * 2 > items.length) return ChannelCardLayout.poster;
+  return ChannelCardLayout.logo;
+}
+
+/// Grid sizing for each layout: posters and stills get much bigger tiles
+/// than logos.
+SliverGridDelegate channelGridDelegate(ChannelCardLayout layout) =>
+    switch (layout) {
+      ChannelCardLayout.logo => const SliverGridDelegateWithMaxCrossAxisExtent(
+          maxCrossAxisExtent: 170,
+          childAspectRatio: 0.95,
+          crossAxisSpacing: 12,
+          mainAxisSpacing: 12,
+        ),
+      // 2:3 picture plus two lines of title.
+      ChannelCardLayout.poster =>
+        const SliverGridDelegateWithMaxCrossAxisExtent(
+          maxCrossAxisExtent: 240,
+          childAspectRatio: 0.56,
+          crossAxisSpacing: 14,
+          mainAxisSpacing: 14,
+        ),
+      // 16:9 picture plus two lines of title.
+      ChannelCardLayout.landscape =>
+        const SliverGridDelegateWithMaxCrossAxisExtent(
+          maxCrossAxisExtent: 380,
+          childAspectRatio: 1.32,
+          crossAxisSpacing: 14,
+          mainAxisSpacing: 14,
+        ),
+    };
+
 class ChannelCard extends StatelessWidget {
   const ChannelCard({
     super.key,
@@ -155,15 +216,18 @@ class ChannelCard extends StatelessWidget {
     required this.favorite,
     required this.onTap,
     required this.onToggleFavorite,
+    this.layout = ChannelCardLayout.logo,
   });
 
   final StremioMeta meta;
   final bool favorite;
   final VoidCallback onTap;
   final VoidCallback onToggleFavorite;
+  final ChannelCardLayout layout;
 
   @override
   Widget build(BuildContext context) {
+    if (layout != ChannelCardLayout.logo) return _buildPicture(context);
     final initials = Center(
       child: Text(
         meta.name.characters.take(3).toString().toUpperCase(),
@@ -228,6 +292,90 @@ class ChannelCard extends StatelessWidget {
                   color: favorite ? Colors.amber : AppTheme.onSurfaceVariant,
                 ),
                 onPressed: onToggleFavorite,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Poster or landscape art filling the tile, title underneath.
+  Widget _buildPicture(BuildContext context) {
+    final image = meta.posterUrl ?? meta.imageUrl;
+    final placeholder = ColoredBox(
+      color: AppTheme.surfaceVariant,
+      child: Center(
+        child: Icon(
+          Icons.live_tv_rounded,
+          size: 40,
+          color: AppTheme.onSurfaceVariant.withAlpha(120),
+        ),
+      ),
+    );
+    return Material(
+      color: AppTheme.cardColor,
+      clipBehavior: Clip.antiAlias,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: const BorderSide(color: Color(0xFF222233)),
+      ),
+      child: InkWell(
+        onTap: onTap,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            AspectRatio(
+              aspectRatio:
+                  layout == ChannelCardLayout.landscape ? 16 / 9 : 2 / 3,
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  image == null
+                      ? placeholder
+                      : Image.network(
+                          image,
+                          fit: BoxFit.cover,
+                          errorBuilder: (_, _, _) => placeholder,
+                        ),
+                  Positioned(
+                    top: 4,
+                    right: 4,
+                    child: Material(
+                      color: Colors.black54,
+                      shape: const CircleBorder(),
+                      child: IconButton(
+                        tooltip: favorite
+                            ? 'Quitar de favoritos'
+                            : 'Añadir a favoritos',
+                        iconSize: 20,
+                        icon: Icon(
+                          favorite
+                              ? Icons.star_rounded
+                              : Icons.star_outline_rounded,
+                          color: favorite ? Colors.amber : Colors.white,
+                        ),
+                        onPressed: onToggleFavorite,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
+                child: Text(
+                  meta.name,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: AppTheme.onBackground,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    height: 1.25,
+                  ),
+                ),
               ),
             ),
           ],
