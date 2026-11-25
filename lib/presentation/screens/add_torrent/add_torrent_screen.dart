@@ -1,10 +1,13 @@
 import 'dart:convert';
+import 'dart:io';
+
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:path_provider/path_provider.dart';
 
 import '../../../core/theme/app_theme.dart';
 import '../../providers/torrent_providers.dart';
@@ -243,27 +246,31 @@ class _AddTorrentScreenState extends ConsumerState<AddTorrentScreen>
   Future<void> _pickFile() async {
     setState(() => _errorMessage = null);
     try {
-      final result = await FilePicker.platform.pickFiles(
+      final picked = await FilePicker.pickFile(
         type: FileType.custom,
         allowedExtensions: ['torrent'],
-        // The browser exposes no file paths, only the bytes.
-        withData: kIsWeb,
       );
-      final picked = result?.files.single;
       if (picked == null) return;
-      if (kIsWeb && picked.bytes != null) {
-        setState(() {
-          _selectedFileName = picked.name;
-          _selectedFilePath = 'data:application/x-bittorrent;'
-              'name=${Uri.encodeComponent(picked.name)};'
-              'base64,${base64Encode(picked.bytes!)}';
-        });
+      final String path;
+      if (kIsWeb) {
+        // The browser exposes no file paths, only the bytes.
+        path = 'data:application/x-bittorrent;'
+            'name=${Uri.encodeComponent(picked.name)};'
+            'base64,${base64Encode(await picked.readAsBytes())}';
       } else if (picked.path != null) {
-        setState(() {
-          _selectedFileName = picked.name;
-          _selectedFilePath = picked.path;
-        });
+        path = picked.path!;
+      } else {
+        // Android may hand back a content:// URI with no file path: copy the
+        // bytes to a temporary file the engine can open.
+        final dir = await getTemporaryDirectory();
+        final file = File('${dir.path}${Platform.pathSeparator}${picked.name}');
+        await file.writeAsBytes(await picked.readAsBytes());
+        path = file.path;
       }
+      setState(() {
+        _selectedFileName = picked.name;
+        _selectedFilePath = path;
+      });
     } catch (e) {
       setState(() => _errorMessage = 'No se ha podido abrir el selector de archivos: $e');
     }

@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -24,7 +24,7 @@ class MediaDetailScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final detailAsync = ref.watch(mediaDetailProvider((tmdbId, mediaType)));
-    final media = detailAsync.valueOrNull ?? initialMedia;
+    final media = detailAsync.value ?? initialMedia;
 
     if (media == null) {
       return Scaffold(
@@ -94,7 +94,7 @@ class _BackdropImage extends StatelessWidget {
           Image.network(
             media.backdropUrl!,
             fit: BoxFit.cover,
-            errorBuilder: (_, __, ___) => Container(color: AppTheme.surface),
+            errorBuilder: (_, _, _) => Container(color: AppTheme.surface),
           )
         else
           Container(color: AppTheme.surface),
@@ -292,7 +292,7 @@ class _GenreChips extends StatelessWidget {
       child: ListView.separated(
         scrollDirection: Axis.horizontal,
         itemCount: genres.length,
-        separatorBuilder: (_, __) => const SizedBox(width: 8),
+        separatorBuilder: (_, _) => const SizedBox(width: 8),
         itemBuilder: (_, i) => Container(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
           decoration: BoxDecoration(
@@ -660,7 +660,7 @@ class _SourcesSheet extends ConsumerWidget {
                 loading: () => const Center(
                   child: CircularProgressIndicator(color: AppTheme.primary),
                 ),
-                error: (_, __) => _SourcesError(onRetry: retry),
+                error: (_, _) => _SourcesError(onRetry: retry),
                 data: (sources) {
                   if (sources.isEmpty) {
                     return const Center(
@@ -712,7 +712,7 @@ class _SourcesSheet extends ConsumerWidget {
                                 padding:
                                     const EdgeInsets.symmetric(vertical: 8),
                                 itemCount: shown.length,
-                                separatorBuilder: (_, __) => const Divider(
+                                separatorBuilder: (_, _) => const Divider(
                                     height: 1, indent: 16, endIndent: 16),
                                 itemBuilder: (_, i) =>
                                     _SourceTile(source: shown[i], media: media),

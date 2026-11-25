@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../widgets/tmdb_key_dialog.dart';
@@ -295,11 +295,14 @@ class SettingsTab extends ConsumerWidget {
             ),
           ),
         ),
-        Container(
-          decoration: BoxDecoration(
-            color: AppTheme.cardColor,
+        // A Material (not a decorated Container) so the ListTiles inside can
+        // paint their ink splashes on it.
+        Material(
+          color: AppTheme.cardColor,
+          clipBehavior: Clip.antiAlias,
+          shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: const Color(0xFF222233)),
+            side: const BorderSide(color: Color(0xFF222233)),
           ),
           child: Column(
             children: children
@@ -416,7 +419,7 @@ class _LanguagePickerSheet extends StatelessWidget {
           shrinkWrap: true,
           physics: const NeverScrollableScrollPhysics(),
           itemCount: kAppLanguages.length,
-          separatorBuilder: (_, __) => const Divider(
+          separatorBuilder: (_, _) => const Divider(
             height: 1,
             indent: 16,
             endIndent: 16,

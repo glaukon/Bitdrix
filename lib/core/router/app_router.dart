@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../data/models/media_model.dart';
@@ -33,7 +33,7 @@ final appRouter = GoRouter(
     GoRoute(
       path: '/torrents',
       name: 'torrents',
-      redirect: (_, __) => '/',
+      redirect: (_, _) => '/',
     ),
 
     GoRoute(
@@ -83,7 +83,7 @@ final appRouter = GoRouter(
     GoRoute(
       path: '/files',
       name: 'files',
-      redirect: (_, __) => '/',
+      redirect: (_, _) => '/',
     ),
 
     // ── Player ───────────────────────────────────────────────────────────────

@@ -1,6 +1,5 @@
 plugins {
     id "com.android.application"
-    id "kotlin-android"
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id "dev.flutter.flutter-gradle-plugin"
 }
@@ -13,16 +12,12 @@ if (keystorePropertiesFile.exists()) {
 
 android {
     namespace = "com.bitdrix.bitdrix"
-    compileSdk = 36
-    ndkVersion = "27.0.12077973"
+    compileSdk = 37  // permission_handler_android 14 requires API 37+
+    ndkVersion = flutter.ndkVersion
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
-    }
-
-    kotlinOptions {
-        jvmTarget = JavaVersion.VERSION_17
     }
 
     defaultConfig {
@@ -55,9 +50,16 @@ android {
         }
     }
 
-    packagingOptions {
-        pickFirst "**/libjlibtorrent.so"
-        pickFirst "**/libc++_shared.so"
+    packaging {
+        jniLibs {
+            pickFirsts += ["**/libjlibtorrent.so", "**/libc++_shared.so"]
+        }
+    }
+}
+
+kotlin {
+    compilerOptions {
+        jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17
     }
 }
 
@@ -66,13 +68,13 @@ flutter {
 }
 
 dependencies {
-    // libtorrent4j — real BitTorrent engine for Android (all ABIs: phones, old
+    // libtorrent4j â€” real BitTorrent engine for Android (all ABIs: phones, old
     // 32-bit devices and x86 emulators)
     def libtorrent4jVersion = "2.1.0-39"
     implementation "org.libtorrent4j:libtorrent4j-android-arm64:$libtorrent4jVersion"
     implementation "org.libtorrent4j:libtorrent4j-android-arm:$libtorrent4jVersion"
     implementation "org.libtorrent4j:libtorrent4j-android-x86_64:$libtorrent4jVersion"
     implementation "org.libtorrent4j:libtorrent4j-android-x86:$libtorrent4jVersion"
-    implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2"
-    implementation "androidx.core:core-ktx:1.16.0"
+    implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0"
+    implementation "androidx.core:core-ktx:1.19.1"
 }

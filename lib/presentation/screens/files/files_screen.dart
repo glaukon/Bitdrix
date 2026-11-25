@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -47,18 +47,23 @@ class _TorrentFolderState extends State<_TorrentFolder> {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-      decoration: BoxDecoration(
+    // A Material (not a decorated Container) so the file ListTiles can paint
+    // their ink on it.
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+      child: Material(
         color: AppTheme.cardColor,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0xFF222233)),
-      ),
-      child: Column(
-        children: [
-          _buildHeader(),
-          if (_expanded) _buildFileList(),
-        ],
+        clipBehavior: Clip.antiAlias,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+          side: const BorderSide(color: Color(0xFF222233)),
+        ),
+        child: Column(
+          children: [
+            _buildHeader(),
+            if (_expanded) _buildFileList(),
+          ],
+        ),
       ),
     );
   }

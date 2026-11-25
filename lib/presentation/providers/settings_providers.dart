@@ -10,9 +10,11 @@ const _kAudioLangKey = 'preferred_audio_language';
 ///
 /// - Default: `'any'` (no filtering).
 /// - Persisted in [SharedPreferences] under [_kLangKey].
-class LanguagePreferenceNotifier extends StateNotifier<AppLanguage> {
-  LanguagePreferenceNotifier() : super(kAppLanguages.first) {
+class LanguagePreferenceNotifier extends Notifier<AppLanguage> {
+  @override
+  AppLanguage build() {
     _load();
+    return kAppLanguages.first;
   }
 
   Future<void> _load() async {
@@ -35,17 +37,19 @@ class LanguagePreferenceNotifier extends StateNotifier<AppLanguage> {
 }
 
 final languagePreferenceProvider =
-    StateNotifierProvider<LanguagePreferenceNotifier, AppLanguage>(
-  (ref) => LanguagePreferenceNotifier(),
+    NotifierProvider<LanguagePreferenceNotifier, AppLanguage>(
+  LanguagePreferenceNotifier.new,
 );
 
 /// Manages the user's preferred playback audio language.
 ///
 /// Defaults to Spanish because playback should prefer castellano/español when
 /// a media file exposes that audio track.
-class AudioLanguagePreferenceNotifier extends StateNotifier<AppLanguage> {
-  AudioLanguagePreferenceNotifier() : super(_spanishLanguage) {
+class AudioLanguagePreferenceNotifier extends Notifier<AppLanguage> {
+  @override
+  AppLanguage build() {
     _load();
+    return _spanishLanguage;
   }
 
   static AppLanguage get _spanishLanguage => kAppLanguages.firstWhere(
@@ -73,8 +77,8 @@ class AudioLanguagePreferenceNotifier extends StateNotifier<AppLanguage> {
 }
 
 final audioLanguagePreferenceProvider =
-    StateNotifierProvider<AudioLanguagePreferenceNotifier, AppLanguage>(
-  (ref) => AudioLanguagePreferenceNotifier(),
+    NotifierProvider<AudioLanguagePreferenceNotifier, AppLanguage>(
+  AudioLanguagePreferenceNotifier.new,
 );
 
 const _kTmdbKey = 'tmdb_api_key';
@@ -82,9 +86,11 @@ const _kTmdbKey = 'tmdb_api_key';
 /// TMDB credential used by Discover: either a v3 API key or a v4 read access
 /// token. Set in Settings, or at build time with
 /// `--dart-define=TMDB_API_KEY=...`. Empty means "not configured".
-class TmdbApiKeyNotifier extends StateNotifier<String> {
-  TmdbApiKeyNotifier() : super(const String.fromEnvironment('TMDB_API_KEY')) {
+class TmdbApiKeyNotifier extends Notifier<String> {
+  @override
+  String build() {
     _load();
+    return const String.fromEnvironment('TMDB_API_KEY');
   }
 
   Future<void> _load() async {
@@ -107,8 +113,8 @@ class TmdbApiKeyNotifier extends StateNotifier<String> {
   }
 }
 
-final tmdbApiKeyProvider = StateNotifierProvider<TmdbApiKeyNotifier, String>(
-  (ref) => TmdbApiKeyNotifier(),
+final tmdbApiKeyProvider = NotifierProvider<TmdbApiKeyNotifier, String>(
+  TmdbApiKeyNotifier.new,
 );
 
 // ── Castilian-only sources filter ────────────────────────────────────────────
@@ -117,9 +123,11 @@ const _kCastilianOnlyKey = 'sources_castilian_only';
 
 /// Whether the sources list shows only sources with Castilian audio.
 /// On by default: the app is tuned for watching everything in castellano.
-class CastilianOnlyNotifier extends StateNotifier<bool> {
-  CastilianOnlyNotifier() : super(true) {
+class CastilianOnlyNotifier extends Notifier<bool> {
+  @override
+  bool build() {
     _load();
+    return true;
   }
 
   Future<void> _load() async {
@@ -134,8 +142,8 @@ class CastilianOnlyNotifier extends StateNotifier<bool> {
   }
 }
 
-final castilianOnlyProvider = StateNotifierProvider<CastilianOnlyNotifier, bool>(
-  (ref) => CastilianOnlyNotifier(),
+final castilianOnlyProvider = NotifierProvider<CastilianOnlyNotifier, bool>(
+  CastilianOnlyNotifier.new,
 );
 
 // ── Subtitles ────────────────────────────────────────────────────────────────
@@ -157,9 +165,11 @@ enum SubtitleMode {
   final String label;
 }
 
-class SubtitleModeNotifier extends StateNotifier<SubtitleMode> {
-  SubtitleModeNotifier() : super(SubtitleMode.auto) {
+class SubtitleModeNotifier extends Notifier<SubtitleMode> {
+  @override
+  SubtitleMode build() {
     _load();
+    return SubtitleMode.auto;
   }
 
   Future<void> _load() async {
@@ -179,6 +189,6 @@ class SubtitleModeNotifier extends StateNotifier<SubtitleMode> {
 }
 
 final subtitleModeProvider =
-    StateNotifierProvider<SubtitleModeNotifier, SubtitleMode>(
-  (ref) => SubtitleModeNotifier(),
+    NotifierProvider<SubtitleModeNotifier, SubtitleMode>(
+  SubtitleModeNotifier.new,
 );

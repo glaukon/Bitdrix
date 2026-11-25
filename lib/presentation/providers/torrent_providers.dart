@@ -132,7 +132,17 @@ final _allTorrentsStreamProvider =
 // ── Selected torrent ───────────────────────────────────────────────────────────
 
 /// The currently selected torrent id (set by navigation).
-final selectedTorrentIdProvider = StateProvider<String?>((ref) => null);
+final selectedTorrentIdProvider =
+    NotifierProvider<SelectedTorrentIdNotifier, String?>(
+  SelectedTorrentIdNotifier.new,
+);
+
+class SelectedTorrentIdNotifier extends Notifier<String?> {
+  @override
+  String? build() => null;
+
+  void set(String? id) => state = id;
+}
 
 /// Returns the [TorrentEntity] for the currently selected id, or null.
 final selectedTorrentProvider = Provider<TorrentEntity?>((ref) {

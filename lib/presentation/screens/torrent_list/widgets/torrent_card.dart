@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:percent_indicator/linear_percent_indicator.dart';
@@ -32,7 +32,7 @@ class TorrentCard extends ConsumerWidget {
         child: InkWell(
           borderRadius: BorderRadius.circular(AppConstants.cardBorderRadius),
           onTap: () {
-            ref.read(selectedTorrentIdProvider.notifier).state = torrent.id;
+            ref.read(selectedTorrentIdProvider.notifier).set(torrent.id);
             context.push('/torrents/${torrent.id}');
           },
           child: Padding(

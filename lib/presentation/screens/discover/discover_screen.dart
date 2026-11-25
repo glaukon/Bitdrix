@@ -1,6 +1,6 @@
 import 'dart:async';
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../data/services/tmdb_service.dart';
@@ -40,14 +40,14 @@ class _DiscoverScreenState extends ConsumerState<DiscoverScreen> {
   void _onSearchChanged(String value) {
     _debounce?.cancel();
     _debounce = Timer(const Duration(milliseconds: 500), () {
-      ref.read(searchQueryProvider.notifier).state = value;
+      ref.read(searchQueryProvider.notifier).set(value);
     });
   }
 
   void _clearSearch() {
     _searchController.clear();
     _debounce?.cancel();
-    ref.read(searchQueryProvider.notifier).state = '';
+    ref.read(searchQueryProvider.notifier).set('');
   }
 
   @override
@@ -98,7 +98,7 @@ class _SearchBar extends StatelessWidget {
               color: AppTheme.onSurfaceVariant),
           suffixIcon: ValueListenableBuilder<TextEditingValue>(
             valueListenable: controller,
-            builder: (_, value, __) {
+            builder: (_, value, _) {
               if (value.text.isEmpty) return const SizedBox.shrink();
               return IconButton(
                 icon: const Icon(Icons.clear_rounded, size: 20),
@@ -328,7 +328,7 @@ class _ShimmerGridState extends State<_ShimmerGrid>
   Widget build(BuildContext context) {
     return AnimatedBuilder(
       animation: _animation,
-      builder: (_, __) {
+      builder: (_, _) {
         final grey = Color.lerp(
           AppTheme.surfaceVariant,
           const Color(0xFF2A2A3A),
@@ -343,7 +343,7 @@ class _ShimmerGridState extends State<_ShimmerGrid>
             mainAxisSpacing: 8,
           ),
           itemCount: 24,
-          itemBuilder: (_, __) => Column(
+          itemBuilder: (_, _) => Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Expanded(
