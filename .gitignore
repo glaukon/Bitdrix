@@ -72,3 +72,7 @@ config/secrets.json
 # Local IDE / build caches
 .vscode/settings.json
 **/.gradle/
+
+# Designer brand pack (kept locally, not versioned)
+/BitDrix/
+/BitDrix-paquete-disenador.zip
