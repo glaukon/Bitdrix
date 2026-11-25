@@ -4,9 +4,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/constants/app_constants.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../providers/torrent_providers.dart';
-import '../discover/discover_screen.dart';
-import '../files/files_screen.dart';
-import '../torrent_list/torrent_list_screen.dart';
+import '../discover/catalog_screen.dart';
+import '../tv/tv_screen.dart';
+import 'downloads_screen.dart';
 import 'settings_tab.dart';
 
 class HomeScreen extends ConsumerStatefulWidget {
@@ -17,23 +17,35 @@ class HomeScreen extends ConsumerStatefulWidget {
 }
 
 class _HomeScreenState extends ConsumerState<HomeScreen> {
-  int _currentIndex = 0;
+  /// Opens on Cine, the main use of the app.
+  int _currentIndex = 1;
+
+  /// From this width on (desktop, tablets in landscape) the tabs move to a
+  /// side rail instead of the bottom bar.
+  static const _railBreakpoint = 840.0;
+
+  static const _downloadsIndex = 3;
 
   static const List<_TabInfo> _tabs = [
     _TabInfo(
-      label: 'Torrents',
-      icon: Icons.download_rounded,
+      label: 'TV',
+      icon: Icons.live_tv_outlined,
+      activeIcon: Icons.live_tv_rounded,
+    ),
+    _TabInfo(
+      label: 'Cine',
+      icon: Icons.movie_outlined,
+      activeIcon: Icons.movie_rounded,
+    ),
+    _TabInfo(
+      label: 'Series',
+      icon: Icons.tv_outlined,
+      activeIcon: Icons.tv_rounded,
+    ),
+    _TabInfo(
+      label: 'Descargas',
+      icon: Icons.download_outlined,
       activeIcon: Icons.download_rounded,
-    ),
-    _TabInfo(
-      label: 'Descubrir',
-      icon: Icons.explore_outlined,
-      activeIcon: Icons.explore_rounded,
-    ),
-    _TabInfo(
-      label: 'Archivos',
-      icon: Icons.folder_outlined,
-      activeIcon: Icons.folder_rounded,
     ),
     _TabInfo(
       label: 'Ajustes',
@@ -43,23 +55,60 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   ];
 
   static const List<Widget> _screens = [
-    TorrentListScreen(),
-    DiscoverScreen(),
-    FilesScreen(),
+    TvScreen(),
+    CatalogScreen(mediaType: 'movie'),
+    CatalogScreen(mediaType: 'tv'),
+    DownloadsScreen(),
     SettingsTab(),
   ];
 
   @override
   Widget build(BuildContext context) {
     final activeCount = ref.watch(activeCountProvider);
+    final wide = MediaQuery.sizeOf(context).width >= _railBreakpoint;
+    final body = IndexedStack(index: _currentIndex, children: _screens);
 
     return Scaffold(
       appBar: _buildAppBar(activeCount),
-      body: IndexedStack(
-        index: _currentIndex,
-        children: _screens,
-      ),
-      bottomNavigationBar: _buildBottomNav(),
+      body: wide
+          ? Row(
+              children: [
+                _buildRail(activeCount),
+                const VerticalDivider(width: 1, color: Color(0xFF222233)),
+                Expanded(child: body),
+              ],
+            )
+          : body,
+      bottomNavigationBar: wide ? null : _buildBottomNav(activeCount),
+    );
+  }
+
+  /// The tab icon, with a counter of active downloads on Descargas.
+  Widget _tabIcon(int index, {required bool selected, required int active}) {
+    final tab = _tabs[index];
+    final icon = Icon(selected ? tab.activeIcon : tab.icon);
+    if (index != _downloadsIndex || active == 0) return icon;
+    return Badge(
+      label: Text('$active'),
+      backgroundColor: AppTheme.accent,
+      child: icon,
+    );
+  }
+
+  Widget _buildRail(int activeCount) {
+    return NavigationRail(
+      selectedIndex: _currentIndex,
+      onDestinationSelected: (index) => setState(() => _currentIndex = index),
+      labelType: NavigationRailLabelType.all,
+      backgroundColor: AppTheme.surface,
+      destinations: [
+        for (var i = 0; i < _tabs.length; i++)
+          NavigationRailDestination(
+            icon: _tabIcon(i, selected: false, active: activeCount),
+            selectedIcon: _tabIcon(i, selected: true, active: activeCount),
+            label: Text(_tabs[i].label),
+          ),
+      ],
     );
   }
 
@@ -139,20 +188,19 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     );
   }
 
-  Widget _buildBottomNav() {
+  Widget _buildBottomNav(int activeCount) {
     return NavigationBar(
       selectedIndex: _currentIndex,
       onDestinationSelected: (index) =>
           setState(() => _currentIndex = index),
-      destinations: _tabs
-          .map(
-            (tab) => NavigationDestination(
-              icon: Icon(tab.icon),
-              selectedIcon: Icon(tab.activeIcon),
-              label: tab.label,
-            ),
-          )
-          .toList(),
+      destinations: [
+        for (var i = 0; i < _tabs.length; i++)
+          NavigationDestination(
+            icon: _tabIcon(i, selected: false, active: activeCount),
+            selectedIcon: _tabIcon(i, selected: true, active: activeCount),
+            label: _tabs[i].label,
+          ),
+      ],
     );
   }
 }

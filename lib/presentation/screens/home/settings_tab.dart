@@ -1,6 +1,8 @@
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'addons_section.dart';
+
 import '../../widgets/tmdb_key_dialog.dart';
 import '../../../core/constants/app_constants.dart';
 import '../../../core/theme/app_theme.dart';
@@ -65,6 +67,8 @@ class SettingsTab extends ConsumerWidget {
             ),
           ],
         ),
+        const SizedBox(height: 20),
+        const AddonsSection(),
         const SizedBox(height: 20),
         _buildSection(
           title: 'Red',

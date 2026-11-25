@@ -1,13 +1,17 @@
 import 'package:material_ui/material_ui.dart';
+import 'package:country_flags/country_flags.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../core/theme/app_theme.dart';
+import '../../../data/models/audio_language.dart';
 import '../../../data/models/media_model.dart';
 import '../../../data/models/stream_source_model.dart';
 import '../../providers/settings_providers.dart';
 import '../../providers/discover_providers.dart';
 import '../../providers/torrent_providers.dart';
+import '../../widgets/horizontal_scroller.dart';
+import '../../widgets/selectable_chip.dart';
 
 class MediaDetailScreen extends ConsumerWidget {
   const MediaDetailScreen({
@@ -678,34 +682,29 @@ class _SourcesSheet extends ConsumerWidget {
                       ),
                     );
                   }
-                  final castilianOnly = ref.watch(castilianOnlyProvider);
-                  final castilian =
-                      sources.where((s) => s.hasCastilianAudioTag).toList();
-                  final shown = castilianOnly ? castilian : sources;
+                  final selected = ref.watch(sourceLanguagesProvider);
+                  final languages = {
+                    for (final s in sources) s: s.audioLanguageCodes,
+                  };
+                  final shown = selected.isEmpty
+                      ? sources
+                      : sources
+                          .where((s) => languages[s]!.any(selected.contains))
+                          .toList();
                   return Column(
                     children: [
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-                        child: Align(
-                          alignment: Alignment.centerLeft,
-                          child: FilterChip(
-                            selected: castilianOnly,
-                            onSelected: (v) =>
-                                ref.read(castilianOnlyProvider.notifier).set(v),
-                            avatar: const Icon(Icons.record_voice_over_rounded, size: 18),
-                            label: Text(
-                              'Solo audio en castellano (${castilian.length})',
-                            ),
-                          ),
-                        ),
+                      _LanguageFilterBar(
+                        languages: languages.values,
+                        total: sources.length,
+                        selected: selected,
                       ),
                       Expanded(
                         child: shown.isEmpty
-                            ? _NoCastilianSources(
+                            ? _NoSourcesInLanguages(
                                 total: sources.length,
                                 onShowAll: () => ref
-                                    .read(castilianOnlyProvider.notifier)
-                                    .set(false),
+                                    .read(sourceLanguagesProvider.notifier)
+                                    .clear(),
                               )
                             : ListView.separated(
                                 controller: scrollController,
@@ -714,8 +713,11 @@ class _SourcesSheet extends ConsumerWidget {
                                 itemCount: shown.length,
                                 separatorBuilder: (_, _) => const Divider(
                                     height: 1, indent: 16, endIndent: 16),
-                                itemBuilder: (_, i) =>
-                                    _SourceTile(source: shown[i], media: media),
+                                itemBuilder: (_, i) => _SourceTile(
+                                  source: shown[i],
+                                  languages: languages[shown[i]]!,
+                                  media: media,
+                                ),
                               ),
                       ),
                     ],
@@ -730,8 +732,120 @@ class _SourcesSheet extends ConsumerWidget {
   }
 }
 
-class _NoCastilianSources extends StatelessWidget {
-  const _NoCastilianSources({required this.total, required this.onShowAll});
+// ── Audio-language filter ─────────────────────────────────────────────────────
+
+/// A row of chips, one per audio language found in the sources, with its
+/// flag and how many sources have it. Tapping chips picks the languages to
+/// show; "Todos" clears the filter.
+class _LanguageFilterBar extends ConsumerWidget {
+  const _LanguageFilterBar({
+    required this.languages,
+    required this.total,
+    required this.selected,
+  });
+
+  final Iterable<List<String>> languages;
+  final int total;
+  final Set<String> selected;
+
+  /// Languages that always go first, in this order, when present.
+  static const _pinned = ['ES', 'MX', 'GB'];
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final counts = <String, int>{};
+    for (final codes in languages) {
+      for (final c in codes) {
+        counts[c] = (counts[c] ?? 0) + 1;
+      }
+    }
+    // Keep chosen languages visible even when this title has none of them,
+    // so they can still be turned off.
+    for (final c in selected) {
+      counts.putIfAbsent(c, () => 0);
+    }
+
+    int rank(String c) {
+      final pinned = _pinned.indexOf(c);
+      if (pinned >= 0) return pinned;
+      if (c == AudioLanguage.unknownCode) return 1 << 20;
+      return _pinned.length;
+    }
+
+    final codes = counts.keys.toList()
+      ..sort((a, b) {
+        final byRank = rank(a).compareTo(rank(b));
+        if (byRank != 0) return byRank;
+        return counts[b]!.compareTo(counts[a]!);
+      });
+    final notifier = ref.read(sourceLanguagesProvider.notifier);
+
+    return HorizontalScroller(
+      height: 60,
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+      wheelScrollsSideways: true,
+      scrollbarAlwaysVisible: true,
+      itemCount: codes.length + 1,
+      itemBuilder: (_, i) {
+        if (i == 0) {
+          return SelectableChip(
+            selected: selected.isEmpty,
+            onSelected: (_) => notifier.clear(),
+            avatar: const Icon(Icons.public_rounded, size: 18),
+            label: 'Todos ($total)',
+          );
+        }
+        final code = codes[i - 1];
+        return SelectableChip(
+          selected: selected.contains(code),
+          onSelected: (_) => notifier.toggle(code),
+          avatar: LanguageFlag(code: code, height: 14),
+          label: '${AudioLanguage.byCode(code).name} (${counts[code]})',
+        );
+      },
+    );
+  }
+}
+
+/// The flag of an audio language, drawn as an image so it also shows on
+/// Windows, whose emoji font has no flags.
+class LanguageFlag extends StatelessWidget {
+  const LanguageFlag({super.key, required this.code, this.height = 12});
+
+  final String code;
+  final double height;
+
+  @override
+  Widget build(BuildContext context) {
+    final width = height * 4 / 3;
+    if (code == AudioLanguage.unknownCode ||
+        FlagCode.fromCountryCode(code) == null) {
+      return SizedBox(
+        width: width,
+        height: height,
+        child: Icon(
+          Icons.help_outline_rounded,
+          size: height,
+          color: AppTheme.onSurfaceVariant,
+        ),
+      );
+    }
+    return Tooltip(
+      message: AudioLanguage.byCode(code).name,
+      child: CountryFlag.fromCountryCode(
+        code,
+        theme: ImageTheme(
+          width: width,
+          height: height,
+          shape: const RoundedRectangle(2),
+        ),
+      ),
+    );
+  }
+}
+
+class _NoSourcesInLanguages extends StatelessWidget {
+  const _NoSourcesInLanguages({required this.total, required this.onShowAll});
 
   final int total;
   final VoidCallback onShowAll;
@@ -748,7 +862,7 @@ class _NoCastilianSources extends StatelessWidget {
                 size: 48, color: AppTheme.onSurfaceVariant),
             const SizedBox(height: 12),
             const Text(
-              'No hay fuentes con audio en castellano para este título.',
+              'No hay fuentes con audio en los idiomas elegidos.',
               textAlign: TextAlign.center,
               style: TextStyle(color: AppTheme.onSurface),
             ),
@@ -807,8 +921,13 @@ class _SourcesError extends StatelessWidget {
 // ── Source tile ───────────────────────────────────────────────────────────────
 
 class _SourceTile extends ConsumerWidget {
-  const _SourceTile({required this.source, required this.media});
+  const _SourceTile({
+    required this.source,
+    required this.languages,
+    required this.media,
+  });
   final StreamSourceModel source;
+  final List<String> languages;
   final MediaModel media;
 
   Color get _qualityColor {
@@ -855,7 +974,7 @@ class _SourceTile extends ConsumerWidget {
         maxLines: 2,
         overflow: TextOverflow.ellipsis,
       ),
-      subtitle: _SourceMeta(source: source),
+      subtitle: _SourceMeta(source: source, languages: languages),
       trailing: const Icon(Icons.download_rounded, color: AppTheme.primary),
     );
   }
@@ -881,15 +1000,22 @@ class _SourceTile extends ConsumerWidget {
 }
 
 class _SourceMeta extends StatelessWidget {
-  const _SourceMeta({required this.source});
+  const _SourceMeta({required this.source, required this.languages});
 
   final StreamSourceModel source;
+  final List<String> languages;
+
+  /// Flags shown before collapsing the rest into "+N".
+  static const _maxFlags = 8;
 
   @override
   Widget build(BuildContext context) {
     final seeders = source.seeders;
-    final badges = source.audioBadges;
-    if (seeders == null && badges.isEmpty) return const SizedBox.shrink();
+    final flags =
+        languages.where((c) => c != AudioLanguage.unknownCode).toList();
+    final extra = flags.length - _maxFlags;
+    final subtitles = source.subtitleLanguageCodes;
+    final extraSubtitles = subtitles.length - _maxFlags;
 
     return Padding(
       padding: const EdgeInsets.only(top: 4),
@@ -906,7 +1032,48 @@ class _SourceMeta extends StatelessWidget {
                 fontSize: 12,
               ),
             ),
-          ...badges.map((badge) => _SourceBadge(label: badge)),
+          if (source.hasMultiAudioTag) const _SourceBadge(label: 'MULTi'),
+          ...flags.take(_maxFlags).map((c) => LanguageFlag(code: c)),
+          if (extra > 0)
+            Text(
+              '+$extra',
+              style: const TextStyle(
+                color: AppTheme.onSurfaceVariant,
+                fontSize: 11,
+              ),
+            ),
+          if (subtitles.isNotEmpty)
+            Tooltip(
+              message: 'Subtítulos (probablemente): '
+                  '${subtitles.map((c) => AudioLanguage.byCode(c).name).join(', ')}',
+              child: Opacity(
+                opacity: 0.55,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(
+                      Icons.closed_caption_outlined,
+                      size: 16,
+                      color: AppTheme.onSurfaceVariant,
+                    ),
+                    for (final c in subtitles.take(_maxFlags)) ...[
+                      const SizedBox(width: 4),
+                      LanguageFlag(code: c, height: 10),
+                    ],
+                    if (extraSubtitles > 0) ...[
+                      const SizedBox(width: 4),
+                      Text(
+                        '+$extraSubtitles',
+                        style: const TextStyle(
+                          color: AppTheme.onSurfaceVariant,
+                          fontSize: 11,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ),
         ],
       ),
     );
@@ -920,12 +1087,7 @@ class _SourceBadge extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final color = switch (label) {
-      'CAST' => AppTheme.success,
-      'ESP' => AppTheme.warning,
-      'LAT' => AppTheme.paused,
-      _ => AppTheme.accent,
-    };
+    const color = AppTheme.accent;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
       decoration: BoxDecoration(
@@ -935,7 +1097,7 @@ class _SourceBadge extends StatelessWidget {
       ),
       child: Text(
         label,
-        style: TextStyle(
+        style: const TextStyle(
           color: color,
           fontSize: 10,
           fontWeight: FontWeight.w700,

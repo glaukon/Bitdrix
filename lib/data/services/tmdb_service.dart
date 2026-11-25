@@ -52,71 +52,46 @@ class TmdbService {
 
   // ── Public API ────────────────────────────────────────────────────────────
 
-  /// Returns movies currently playing in theaters for the configured region.
-  Future<List<MediaModel>> getNowPlayingMovies({int page = 1}) async {
+  /// Titles and overviews in Castilian Spanish.
+  static const _language = 'es-ES';
+
+  /// Fetches one of TMDB's ready-made lists ([path], e.g. `/movie/popular`
+  /// or `/trending/tv/day`) of [mediaType] items. [region] limits release
+  /// lists such as "now playing" to one country.
+  Future<List<MediaModel>> getList(
+    String path, {
+    required String mediaType,
+    String? region,
+    int page = 1,
+  }) async {
     final response = await _dio.get(
-      '/movie/now_playing',
+      path,
       queryParameters: {
         'page': page,
-        'language': 'en-US',
-        'region': 'ES',
+        'language': _language,
+        'region': ?region,
       },
     );
-    return _parseResults(response.data, forceMediaType: 'movie');
+    return _parseResults(response.data, forceMediaType: mediaType);
   }
 
-  /// Returns upcoming theatrical movies for the configured region.
-  Future<List<MediaModel>> getUpcomingMovies({int page = 1}) async {
-    final response = await _dio.get(
-      '/movie/upcoming',
-      queryParameters: {
-        'page': page,
-        'language': 'en-US',
-        'region': 'ES',
-      },
-    );
-    return _parseResults(response.data, forceMediaType: 'movie');
-  }
-
-  /// Returns TV shows currently airing.
-  Future<List<MediaModel>> getOnTheAirTvShows({int page = 1}) async {
-    final response = await _dio.get(
-      '/tv/on_the_air',
-      queryParameters: {'page': page, 'language': 'en-US'},
-    );
-    return _parseResults(response.data, forceMediaType: 'tv');
-  }
-
-  /// Returns trending movies and TV shows for the given time window.
-  ///
-  /// [timeWindow] must be `'day'` or `'week'`.
-  Future<List<MediaModel>> getTrending({String timeWindow = 'week'}) async {
-    final response = await _dio.get(
-      '/trending/all/$timeWindow',
-      queryParameters: {'language': 'en-US'},
-    );
-    return _parseResults(response.data);
-  }
-
-  /// Searches TMDB for movies and TV shows matching [query].
-  ///
-  /// Returns an empty list when [query] is blank.
-  Future<List<MediaModel>> search(String query, {int page = 1}) async {
+  /// Searches only movies (`'movie'`) or only TV shows (`'tv'`).
+  Future<List<MediaModel>> searchByType(
+    String query,
+    String mediaType, {
+    int page = 1,
+  }) async {
     if (query.trim().isEmpty) return [];
-
     final response = await _dio.get(
-      '/search/multi',
+      '/search/$mediaType',
       queryParameters: {
         'query': query.trim(),
         'include_adult': false,
-        'language': 'en-US',
+        'language': _language,
         'page': page,
       },
     );
-
-    final all = _parseResults(response.data);
-    // Filter to only movie and tv — exclude person results, etc.
-    return all.where((m) => m.mediaType == 'movie' || m.mediaType == 'tv').toList();
+    return _parseResults(response.data, forceMediaType: mediaType);
   }
 
   /// Returns the IMDB identifier for a TMDB title.
@@ -140,7 +115,7 @@ class TmdbService {
     final path = mediaType == 'tv' ? '/tv/$tmdbId' : '/movie/$tmdbId';
     final response = await _dio.get(
       path,
-      queryParameters: {'language': 'en-US'},
+      queryParameters: {'language': _language},
     );
     final json = response.data as Map<String, dynamic>;
     // Inject media_type so fromJson resolves the correct field names.

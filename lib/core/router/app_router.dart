@@ -115,6 +115,11 @@ final appRouter = GoRouter(
         final title = extra['title'] as String? ?? 'Reproduciendo';
         final torrentId = extra['torrentId'] as String?;
         final selectedFileId = extra['selectedFileId'] as String?;
+        final isLive = extra['isLive'] as bool? ?? false;
+        final fallbackUrls =
+            (extra['fallbackUrls'] as List<String>?) ?? const <String>[];
+        final httpHeaders = (extra['httpHeaders'] as Map<String, String>?) ??
+            const <String, String>{};
         return CustomTransitionPage(
           key: state.pageKey,
           child: PlayerScreen(
@@ -122,6 +127,9 @@ final appRouter = GoRouter(
             title: title,
             torrentId: torrentId,
             selectedFileId: selectedFileId,
+            isLive: isLive,
+            fallbackUrls: fallbackUrls,
+            httpHeaders: httpHeaders,
           ),
           transitionsBuilder: _fadeTransition,
           opaque: true,

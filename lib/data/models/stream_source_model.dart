@@ -1,3 +1,5 @@
+import 'audio_language.dart';
+
 /// A torrent source returned by the Torrentio Stremio add-on API.
 class StreamSourceModel {
   const StreamSourceModel({
@@ -104,6 +106,47 @@ class StreamSourceModel {
 
   /// True when the source name/title suggests multiple audio tracks.
   bool get hasMultiAudioTag => _containsAnyTag(searchableText, multiAudioTags);
+
+  static final RegExp _flagPattern =
+      RegExp(r'[\u{1F1E6}-\u{1F1FF}]{2}', unicode: true);
+
+  /// Torrentio's flags list every language a release mentions, subtitles
+  /// included. Short lists (🇬🇧 / 🇪🇸) are real dubs; longer ones are almost
+  /// always the subtitle languages of a single-audio release.
+  static const maxAudioFlags = 3;
+
+  /// Audio languages of this source as flag country codes (see
+  /// [AudioLanguage]). Sources whose audio language is unknown get
+  /// [AudioLanguage.unknownCode].
+  List<String> get audioLanguageCodes => _languages().audio;
+
+  /// Languages that are most likely subtitles, not audio: the flags of a
+  /// long list that the release name does not confirm as audio.
+  List<String> get subtitleLanguageCodes => _languages().subtitles;
+
+  ({List<String> audio, List<String> subtitles}) _languages() {
+    final flags = <String>{
+      for (final m in _flagPattern.allMatches(title))
+        AudioLanguage.normalize(String.fromCharCodes(
+          m.group(0)!.runes.map((r) => r - 0x1F1E6 + 0x41),
+        )),
+    };
+    final text = searchableText;
+    final named = <String>{
+      for (final lang in AudioLanguage.withKeywords)
+        if (_containsAnyTag(text, lang.keywords)) lang.code,
+    };
+
+    final flagsAreAudio = flags.length <= maxAudioFlags;
+    final audio = flagsAreAudio ? {...flags, ...named} : named;
+    final subtitles = flagsAreAudio
+        ? const <String>[]
+        : flags.where((c) => !audio.contains(c)).toList();
+    return (
+      audio: audio.isEmpty ? const [AudioLanguage.unknownCode] : audio.toList(),
+      subtitles: subtitles,
+    );
+  }
 
   /// Labels shown in source lists so users can spot likely multi-audio files.
   List<String> get audioBadges => [

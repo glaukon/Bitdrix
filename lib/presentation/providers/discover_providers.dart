@@ -16,53 +16,68 @@ final tmdbServiceProvider = Provider<TmdbService>(
 final torrentioServiceProvider =
     Provider<TorrentioService>((ref) => TorrentioService());
 
-// ── Content providers ─────────────────────────────────────────────────────────
+// ── Catalog (Cine / Series) ───────────────────────────────────────────────────
 
-/// Daily trending movies and TV shows from TMDB.
-final trendingProvider =
-    FutureProvider.autoDispose<List<MediaModel>>((ref) async {
-  return ref.watch(tmdbServiceProvider).getTrending(timeWindow: 'day');
-});
+/// The rows shown on the Cine and Series tabs, in order.
+enum CatalogList {
+  trendingMovies('Tendencias de hoy', '/trending/movie/day', 'movie'),
+  nowPlaying('En cines en España', '/movie/now_playing', 'movie', 'ES'),
+  upcoming('Próximos estrenos', '/movie/upcoming', 'movie', 'ES'),
+  popularMovies('Populares', '/movie/popular', 'movie'),
+  topRatedMovies('Mejor valoradas', '/movie/top_rated', 'movie'),
+  trendingTv('Tendencias de hoy', '/trending/tv/day', 'tv'),
+  onTheAir('En emisión', '/tv/on_the_air', 'tv'),
+  popularTv('Populares', '/tv/popular', 'tv'),
+  topRatedTv('Mejor valoradas', '/tv/top_rated', 'tv');
 
-/// Movies currently in theaters from TMDB.
-final nowPlayingMoviesProvider =
-    FutureProvider.autoDispose<List<MediaModel>>((ref) async {
-  return ref.watch(tmdbServiceProvider).getNowPlayingMovies();
-});
+  const CatalogList(this.title, this.path, this.mediaType, [this.region]);
 
-/// Upcoming movies from TMDB.
-final upcomingMoviesProvider =
-    FutureProvider.autoDispose<List<MediaModel>>((ref) async {
-  return ref.watch(tmdbServiceProvider).getUpcomingMovies();
-});
+  final String title;
+  final String path;
 
-/// TV shows currently airing from TMDB.
-final onTheAirTvProvider =
-    FutureProvider.autoDispose<List<MediaModel>>((ref) async {
-  return ref.watch(tmdbServiceProvider).getOnTheAirTvShows();
-});
+  /// `'movie'` or `'tv'`.
+  final String mediaType;
+  final String? region;
+
+  static List<CatalogList> forType(String mediaType) =>
+      values.where((l) => l.mediaType == mediaType).toList();
+}
+
+final catalogListProvider =
+    FutureProvider.autoDispose.family<List<MediaModel>, CatalogList>(
+  (ref, list) => ref.watch(tmdbServiceProvider).getList(
+        list.path,
+        mediaType: list.mediaType,
+        region: list.region,
+      ),
+);
 
 // ── Search ────────────────────────────────────────────────────────────────────
 
-/// Holds the current search query string.
+/// The search text of the Cine (`'movie'`) or Series (`'tv'`) tab.
 final searchQueryProvider =
-    NotifierProvider<SearchQueryNotifier, String>(SearchQueryNotifier.new);
+    NotifierProvider.family<SearchQueryNotifier, String, String>(
+  SearchQueryNotifier.new,
+);
 
 class SearchQueryNotifier extends Notifier<String> {
+  SearchQueryNotifier(this.mediaType);
+
+  final String mediaType;
+
   @override
   String build() => '';
 
   void set(String query) => state = query;
 }
 
-/// Search results derived from [searchQueryProvider].
-///
-/// Returns an empty list immediately when the query is blank so the UI can
-/// fall back to the trending grid without a loading flicker.
-final searchResultsProvider = FutureProvider<List<MediaModel>>((ref) async {
-  final query = ref.watch(searchQueryProvider);
+/// Search results of one tab. Empty right away for a blank query so the tab
+/// falls back to its rows without a loading flicker.
+final searchResultsProvider =
+    FutureProvider.family<List<MediaModel>, String>((ref, mediaType) async {
+  final query = ref.watch(searchQueryProvider(mediaType));
   if (query.trim().isEmpty) return [];
-  return ref.watch(tmdbServiceProvider).search(query);
+  return ref.watch(tmdbServiceProvider).searchByType(query, mediaType);
 });
 
 // ── Detail ────────────────────────────────────────────────────────────────────

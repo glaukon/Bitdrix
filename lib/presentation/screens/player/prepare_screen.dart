@@ -10,6 +10,7 @@ import '../../../core/utils/file_size_formatter.dart';
 import '../../../domain/entities/torrent_entity.dart';
 import '../../../domain/entities/torrent_file_entity.dart';
 import '../../providers/torrent_providers.dart';
+import '../../widgets/loading_bar.dart';
 
 /// Full-screen "getting ready" page shown between choosing a source and
 /// playback. It waits for the torrent metadata, picks the video file, asks the
@@ -228,15 +229,7 @@ class _PrepareScreenState extends ConsumerState<PrepareScreen> {
           ),
         ),
         const SizedBox(height: 32),
-        const SizedBox(
-          width: 44,
-          height: 44,
-          child: CircularProgressIndicator(
-            strokeWidth: 3,
-            color: AppTheme.primary,
-            backgroundColor: Colors.white12,
-          ),
-        ),
+        const LoadingBar(),
         const SizedBox(height: 20),
         AnimatedSwitcher(
           duration: const Duration(milliseconds: 250),

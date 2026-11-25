@@ -23,6 +23,8 @@ dependencies:
   percent_indicator: ^4.2.5
 
   material_ui: ^1.11.1
+  country_flags: ^4.1.2
+  url_launcher: ^6.3.3
 dependency_overrides:
   media_kit_video:
     path: third_party/media_kit_video

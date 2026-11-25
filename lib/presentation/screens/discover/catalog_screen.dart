@@ -1,34 +1,40 @@
 import 'dart:async';
 
-import 'package:material_ui/material_ui.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
+import 'package:material_ui/material_ui.dart';
 
-import '../../../data/services/tmdb_service.dart';
-import '../../providers/settings_providers.dart';
-import '../../widgets/tmdb_key_dialog.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../data/models/media_model.dart';
+import '../../../data/services/tmdb_service.dart';
 import '../../providers/discover_providers.dart';
+import '../../providers/settings_providers.dart';
+import '../../widgets/horizontal_scroller.dart';
+import '../../widgets/tmdb_key_dialog.dart';
 import 'widgets/media_card.dart';
 
-/// Maximum width of a poster card in the Discover grids.
+/// Maximum width of a poster card in the search-results grid.
 const double _kCardMaxWidth = 180;
 
-/// The Discover tab — browse trending content or search TMDB.
-///
-/// - Empty search: shows a 2-column trending grid.
-/// - Active search: shows search results in the same 2-column grid.
-/// - Debounces user input by 500 ms before updating the provider.
-class DiscoverScreen extends ConsumerStatefulWidget {
-  const DiscoverScreen({super.key});
+/// Width of a poster card in the horizontal rows.
+const double _kRowCardWidth = 140;
+
+/// The Cine (`mediaType: 'movie'`) or Series (`'tv'`) tab: a featured title,
+/// then rows of TMDB lists; typing searches only that kind of title.
+class CatalogScreen extends ConsumerStatefulWidget {
+  const CatalogScreen({super.key, required this.mediaType});
+
+  final String mediaType;
 
   @override
-  ConsumerState<DiscoverScreen> createState() => _DiscoverScreenState();
+  ConsumerState<CatalogScreen> createState() => _CatalogScreenState();
 }
 
-class _DiscoverScreenState extends ConsumerState<DiscoverScreen> {
+class _CatalogScreenState extends ConsumerState<CatalogScreen> {
   final _searchController = TextEditingController();
   Timer? _debounce;
+
+  bool get _isMovies => widget.mediaType == 'movie';
 
   @override
   void dispose() {
@@ -40,31 +46,33 @@ class _DiscoverScreenState extends ConsumerState<DiscoverScreen> {
   void _onSearchChanged(String value) {
     _debounce?.cancel();
     _debounce = Timer(const Duration(milliseconds: 500), () {
-      ref.read(searchQueryProvider.notifier).set(value);
+      ref.read(searchQueryProvider(widget.mediaType).notifier).set(value);
     });
   }
 
   void _clearSearch() {
     _searchController.clear();
     _debounce?.cancel();
-    ref.read(searchQueryProvider.notifier).set('');
+    ref.read(searchQueryProvider(widget.mediaType).notifier).set('');
   }
 
   @override
   Widget build(BuildContext context) {
-    final query = ref.watch(searchQueryProvider);
+    final query = ref.watch(searchQueryProvider(widget.mediaType));
     final isSearching = query.trim().isNotEmpty;
 
     return Column(
       children: [
         _SearchBar(
           controller: _searchController,
+          hint: _isMovies ? 'Buscar películas…' : 'Buscar series…',
           onChanged: _onSearchChanged,
           onClear: _clearSearch,
         ),
         Expanded(
-          child:
-              isSearching ? _SearchResultsView(query: query) : _TrendingView(),
+          child: isSearching
+              ? _SearchResultsView(mediaType: widget.mediaType, query: query)
+              : _BrowseView(mediaType: widget.mediaType),
         ),
       ],
     );
@@ -76,11 +84,13 @@ class _DiscoverScreenState extends ConsumerState<DiscoverScreen> {
 class _SearchBar extends StatelessWidget {
   const _SearchBar({
     required this.controller,
+    required this.hint,
     required this.onChanged,
     required this.onClear,
   });
 
   final TextEditingController controller;
+  final String hint;
   final ValueChanged<String> onChanged;
   final VoidCallback onClear;
 
@@ -93,7 +103,7 @@ class _SearchBar extends StatelessWidget {
         onChanged: onChanged,
         style: const TextStyle(color: AppTheme.onBackground),
         decoration: InputDecoration(
-          hintText: 'Buscar películas y series…',
+          hintText: hint,
           prefixIcon: const Icon(Icons.search_rounded,
               color: AppTheme.onSurfaceVariant),
           suffixIcon: ValueListenableBuilder<TextEditingValue>(
@@ -113,73 +123,208 @@ class _SearchBar extends StatelessWidget {
   }
 }
 
-// ── Trending view ─────────────────────────────────────────────────────────────
+// ── Browse view: featured title + rows ───────────────────────────────────────
 
-class _TrendingView extends ConsumerWidget {
+class _BrowseView extends ConsumerWidget {
+  const _BrowseView({required this.mediaType});
+
+  final String mediaType;
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final trendingAsync = ref.watch(trendingProvider);
-    final nowPlayingMoviesAsync = ref.watch(nowPlayingMoviesProvider);
-    final upcomingMoviesAsync = ref.watch(upcomingMoviesProvider);
-    final onTheAirTvAsync = ref.watch(onTheAirTvProvider);
+    final lists = CatalogList.forType(mediaType);
+    // The first list decides between content and an error (such as a missing
+    // TMDB key); the other rows load on their own.
+    final first = ref.watch(catalogListProvider(lists.first));
 
-    Future<void> refreshDiscover() async {
-      ref.invalidate(trendingProvider);
-      ref.invalidate(nowPlayingMoviesProvider);
-      ref.invalidate(upcomingMoviesProvider);
-      ref.invalidate(onTheAirTvProvider);
-      await Future.wait([
-        ref.read(trendingProvider.future),
-        ref.read(nowPlayingMoviesProvider.future),
-        ref.read(upcomingMoviesProvider.future),
-        ref.read(onTheAirTvProvider.future),
-      ]);
+    Future<void> refresh() async {
+      for (final list in lists) {
+        ref.invalidate(catalogListProvider(list));
+      }
+      await ref.read(catalogListProvider(lists.first).future);
     }
 
-    return trendingAsync.when(
+    return first.when(
       loading: () => _ShimmerGrid(),
       error: (error, _) => _ErrorView(
         error: error,
         message: 'No se ha podido cargar el contenido.',
-        onRetry: () => ref.invalidate(trendingProvider),
+        onRetry: () => ref.invalidate(catalogListProvider(lists.first)),
       ),
       data: (items) {
-        final sections = [
-          _MediaSection(title: 'Tendencias de hoy', items: items),
-          nowPlayingMoviesAsync.maybeWhen(
-            data: (movies) => _MediaSection(
-              title: 'En cines en España',
-              items: movies,
-            ),
-            orElse: () => null,
+        final featured = items
+            .where((m) => m.backdropUrl != null)
+            .firstOrNull;
+        return RefreshIndicator(
+          color: AppTheme.primary,
+          backgroundColor: AppTheme.surface,
+          onRefresh: refresh,
+          child: ListView(
+            physics: const AlwaysScrollableScrollPhysics(),
+            padding: const EdgeInsets.only(bottom: 24),
+            children: [
+              if (featured != null) _FeaturedBanner(media: featured),
+              for (final list in lists) _CatalogRow(list: list),
+            ],
           ),
-          upcomingMoviesAsync.maybeWhen(
-            data: (movies) => _MediaSection(
-              title: 'Próximos estrenos',
-              items: movies,
-            ),
-            orElse: () => null,
-          ),
-          onTheAirTvAsync.maybeWhen(
-            data: (shows) => _MediaSection(
-              title: 'En emisión',
-              items: shows,
-            ),
-            orElse: () => null,
-          ),
-        ]
-            .whereType<_MediaSection>()
-            .where((section) => section.items.isNotEmpty)
-            .toList();
-
-        if (sections.isEmpty) {
-          return const _EmptyView(message: 'No se ha encontrado contenido.');
-        }
-        return _MediaGrid(
-          sections: sections,
-          onRefresh: refreshDiscover,
         );
       },
+    );
+  }
+}
+
+/// The top trending title, large, with its backdrop and synopsis.
+class _FeaturedBanner extends StatelessWidget {
+  const _FeaturedBanner({required this.media});
+
+  final MediaModel media;
+
+  @override
+  Widget build(BuildContext context) {
+    void open() => context.push('/discover/${media.id}', extra: media);
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+      child: Material(
+        color: AppTheme.cardColor,
+        clipBehavior: Clip.antiAlias,
+        borderRadius: BorderRadius.circular(16),
+        child: InkWell(
+          onTap: open,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxHeight: 340),
+            child: AspectRatio(
+              aspectRatio: 16 / 7,
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  Image.network(
+                    media.backdropUrl!,
+                    fit: BoxFit.cover,
+                    alignment: Alignment.topCenter,
+                    errorBuilder: (_, _, _) => const SizedBox.shrink(),
+                  ),
+                  const DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.centerLeft,
+                        end: Alignment.centerRight,
+                        colors: [Color(0xF00A0A12), Color(0x000A0A12)],
+                        stops: [0.0, 0.75],
+                      ),
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.all(20),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      children: [
+                        const Text(
+                          'DESTACADO HOY',
+                          style: TextStyle(
+                            color: AppTheme.accent,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: 1.4,
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                        FractionallySizedBox(
+                          widthFactor: 0.6,
+                          child: Text(
+                            media.displayTitle,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 26,
+                              fontWeight: FontWeight.w800,
+                              height: 1.15,
+                            ),
+                          ),
+                        ),
+                        if (media.overview?.isNotEmpty ?? false) ...[
+                          const SizedBox(height: 8),
+                          FractionallySizedBox(
+                            widthFactor: 0.6,
+                            child: Text(
+                              media.overview!,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                color: Colors.white70,
+                                fontSize: 13,
+                                height: 1.35,
+                              ),
+                            ),
+                          ),
+                        ],
+                        const SizedBox(height: 14),
+                        FilledButton.icon(
+                          onPressed: open,
+                          icon: const Icon(Icons.play_arrow_rounded),
+                          label: const Text('Ver fuentes'),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// One titled, horizontally scrolling row of posters.
+class _CatalogRow extends ConsumerWidget {
+  const _CatalogRow({required this.list});
+
+  final CatalogList list;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final items = ref.watch(catalogListProvider(list)).value;
+    // Rows that fail or come back empty are simply left out.
+    if (items != null && items.isEmpty) return const SizedBox.shrink();
+
+    const posterHeight = _kRowCardWidth * 3 / 2;
+    const rowHeight = posterHeight + 44;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 10),
+          child: Text(
+            list.title,
+            style: const TextStyle(
+              color: AppTheme.onBackground,
+              fontSize: 18,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ),
+        items == null
+            ? const SizedBox(
+                height: rowHeight,
+                child: Center(
+                  child: CircularProgressIndicator(color: AppTheme.primary),
+                ),
+              )
+            : HorizontalScroller(
+                height: rowHeight,
+                spacing: 12,
+                itemCount: items.length,
+                itemBuilder: (_, i) => SizedBox(
+                  width: _kRowCardWidth,
+                  child: MediaCard(media: items[i]),
+                ),
+              ),
+      ],
     );
   }
 }
@@ -187,109 +332,41 @@ class _TrendingView extends ConsumerWidget {
 // ── Search results view ───────────────────────────────────────────────────────
 
 class _SearchResultsView extends ConsumerWidget {
-  const _SearchResultsView({required this.query});
+  const _SearchResultsView({required this.mediaType, required this.query});
 
+  final String mediaType;
   final String query;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final resultsAsync = ref.watch(searchResultsProvider);
+    final resultsAsync = ref.watch(searchResultsProvider(mediaType));
 
     return resultsAsync.when(
       loading: () => _ShimmerGrid(),
       error: (error, _) => _ErrorView(
         error: error,
         message: 'La búsqueda ha fallado. Inténtalo de nuevo.',
-        onRetry: () => ref.invalidate(searchResultsProvider),
+        onRetry: () => ref.invalidate(searchResultsProvider(mediaType)),
       ),
       data: (items) {
         if (items.isEmpty) {
           return _EmptyView(message: 'No hay resultados para "$query".');
         }
-        return _MediaGrid(
-          sections: [
-            _MediaSection(
-              title: 'Resultados para "$query"',
-              items: items,
-            ),
-          ],
+        return GridView.builder(
+          padding: const EdgeInsets.fromLTRB(12, 4, 12, 24),
+          gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+            maxCrossAxisExtent: _kCardMaxWidth,
+            childAspectRatio: 0.52,
+            crossAxisSpacing: 4,
+            mainAxisSpacing: 4,
+          ),
+          itemCount: items.length,
+          itemBuilder: (_, i) => Padding(
+            padding: const EdgeInsets.all(4),
+            child: MediaCard(media: items[i]),
+          ),
         );
       },
-    );
-  }
-}
-
-// ── Shared grid ───────────────────────────────────────────────────────────────
-
-class _MediaSection {
-  const _MediaSection({
-    required this.title,
-    required this.items,
-  });
-
-  final String title;
-  final List<MediaModel> items;
-}
-
-class _MediaGrid extends StatelessWidget {
-  const _MediaGrid({
-    required this.sections,
-    this.onRefresh,
-  });
-
-  final List<_MediaSection> sections;
-  final Future<void> Function()? onRefresh;
-
-  @override
-  Widget build(BuildContext context) {
-    final scrollView = CustomScrollView(
-      physics: const AlwaysScrollableScrollPhysics(),
-      slivers: [
-        for (final section in sections) ...[
-          SliverToBoxAdapter(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
-              child: Text(
-                section.title,
-                style: const TextStyle(
-                  color: AppTheme.onBackground,
-                  fontSize: 18,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-            ),
-          ),
-          SliverPadding(
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            sliver: SliverGrid(
-              delegate: SliverChildBuilderDelegate(
-                (context, index) => Padding(
-                  padding: const EdgeInsets.all(4),
-                  child: MediaCard(media: section.items[index]),
-                ),
-                childCount: section.items.length,
-              ),
-              // Fixed max card width: 2 columns on phones, many on desktop.
-              gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-                maxCrossAxisExtent: _kCardMaxWidth,
-                childAspectRatio: 0.52,
-                crossAxisSpacing: 4,
-                mainAxisSpacing: 4,
-              ),
-            ),
-          ),
-        ],
-        const SliverToBoxAdapter(child: SizedBox(height: 24)),
-      ],
-    );
-
-    if (onRefresh == null) return scrollView;
-
-    return RefreshIndicator(
-      color: AppTheme.primary,
-      backgroundColor: AppTheme.surface,
-      onRefresh: onRefresh!,
-      child: scrollView,
     );
   }
 }

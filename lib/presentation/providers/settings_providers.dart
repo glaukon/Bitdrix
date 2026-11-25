@@ -2,6 +2,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../data/models/app_language.dart';
+import '../../data/models/audio_language.dart';
 
 const _kLangKey = 'preferred_language';
 const _kAudioLangKey = 'preferred_audio_language';
@@ -117,33 +118,51 @@ final tmdbApiKeyProvider = NotifierProvider<TmdbApiKeyNotifier, String>(
   TmdbApiKeyNotifier.new,
 );
 
-// ── Castilian-only sources filter ────────────────────────────────────────────
+// ── Sources audio-language filter ────────────────────────────────────────────
 
-const _kCastilianOnlyKey = 'sources_castilian_only';
+const _kSourceLanguagesKey = 'sources_audio_languages';
+const _kLegacyCastilianOnlyKey = 'sources_castilian_only';
 
-/// Whether the sources list shows only sources with Castilian audio.
-/// On by default: the app is tuned for watching everything in castellano.
-class CastilianOnlyNotifier extends Notifier<bool> {
+/// Audio languages (flag country codes, see [AudioLanguage]) the sources list
+/// is filtered by. Empty means "show every source". Castellano by default:
+/// the app is tuned for watching everything in castellano.
+class SourceLanguagesNotifier extends Notifier<Set<String>> {
+  static const _default = {'ES'};
+
   @override
-  bool build() {
+  Set<String> build() {
     _load();
-    return true;
+    return _default;
   }
 
   Future<void> _load() async {
     final prefs = await SharedPreferences.getInstance();
-    state = prefs.getBool(_kCastilianOnlyKey) ?? true;
+    final saved = prefs.getStringList(_kSourceLanguagesKey);
+    if (saved != null) {
+      state = saved.toSet();
+    } else if (prefs.getBool(_kLegacyCastilianOnlyKey) == false) {
+      // The old "Solo audio en castellano" switch was turned off.
+      state = const {};
+    }
   }
 
-  Future<void> set(bool value) async {
-    state = value;
+  /// Adds or removes one language from the filter.
+  Future<void> toggle(String code) =>
+      _save(state.contains(code) ? ({...state}..remove(code)) : {...state, code});
+
+  /// Shows every source again.
+  Future<void> clear() => _save(const {});
+
+  Future<void> _save(Set<String> codes) async {
+    state = codes;
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_kCastilianOnlyKey, value);
+    await prefs.setStringList(_kSourceLanguagesKey, codes.toList());
   }
 }
 
-final castilianOnlyProvider = NotifierProvider<CastilianOnlyNotifier, bool>(
-  CastilianOnlyNotifier.new,
+final sourceLanguagesProvider =
+    NotifierProvider<SourceLanguagesNotifier, Set<String>>(
+  SourceLanguagesNotifier.new,
 );
 
 // ── Subtitles ────────────────────────────────────────────────────────────────

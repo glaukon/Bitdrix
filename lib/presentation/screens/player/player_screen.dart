@@ -15,6 +15,7 @@ import '../../../domain/entities/torrent_file_entity.dart';
 import '../../../domain/entities/torrent_entity.dart';
 import '../../providers/settings_providers.dart';
 import '../../providers/torrent_providers.dart';
+import '../../widgets/loading_bar.dart';
 
 /// Full-screen video player with optional streaming-mode support.
 ///
@@ -27,12 +28,26 @@ class PlayerScreen extends ConsumerStatefulWidget {
     required this.title,
     this.torrentId,
     this.selectedFileId,
+    this.isLive = false,
+    this.fallbackUrls = const [],
+    this.httpHeaders = const {},
   });
 
   final String filePath;
   final String title;
   final String? torrentId;
   final String? selectedFileId;
+
+  /// A live TV channel: no resume, no seek bar.
+  final bool isLive;
+
+  /// Other streams of the same live channel, tried in order when the
+  /// current one fails.
+  final List<String> fallbackUrls;
+
+  /// HTTP headers the stream requires (from a Stremio addon's
+  /// `behaviorHints.proxyHeaders`).
+  final Map<String, String> httpHeaders;
 
   @override
   ConsumerState<PlayerScreen> createState() => _PlayerScreenState();
@@ -61,6 +76,23 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   DateTime _lastPositionSave = DateTime.fromMillisecondsSinceEpoch(0);
 
   bool get _isStreamingMode => widget.torrentId != null;
+
+  /// Index into [_liveSources] of the stream being played.
+  int _liveSourceIndex = 0;
+  List<String> get _liveSources => [widget.filePath, ...widget.fallbackUrls];
+
+  /// Switches a live channel to its next stream. Returns false when there
+  /// are none left.
+  bool _tryNextLiveSource() {
+    if (!widget.isLive || _liveSourceIndex + 1 >= _liveSources.length) {
+      return false;
+    }
+    _liveSourceIndex++;
+    _initialized = false;
+    _openedSource = null;
+    unawaited(_initPlayer(_liveSources[_liveSourceIndex]));
+    return true;
+  }
 
   @override
   void initState() {
@@ -91,7 +123,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     final dynamic mpv = _player.platform;
     unawaited(() async {
       try {
-        await mpv.setProperty('network-timeout', '300');
+        // Live channels fail over to their next stream instead of waiting.
+        await mpv.setProperty('network-timeout', widget.isLive ? '15' : '300');
         await mpv.setProperty('cache', 'yes');
         await mpv.setProperty('cache-secs', '30');
         await mpv.setProperty('demuxer-readahead-secs', '30');
@@ -115,6 +148,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
         repaint(null);
       }),
       _player.stream.buffering.listen(repaint),
+      _player.stream.bufferingPercentage.listen(repaint),
       _player.stream.tracks.listen((_) {
         unawaited(_applyTrackPreferences());
         repaint(null);
@@ -125,8 +159,10 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
       _player.stream.error.listen((message) {
         debugPrint('Player error: $message');
         // Only fatal before playback starts; mpv recovers from later hiccups.
-        if (!_initialized && mounted) {
-          setState(() => _error = 'No se puede reproducir este archivo.\n$message');
+        if (!_initialized && mounted && !_tryNextLiveSource()) {
+          setState(() => _error = widget.isLive
+              ? 'Este canal no está disponible ahora mismo.'
+              : 'No se puede reproducir este archivo.\n$message');
         }
       }),
     ]);
@@ -142,7 +178,13 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     _initializingPlayer = true;
     _openedSource = source;
     try {
-      await _player.open(Media(uri), play: true);
+      await _player.open(
+        Media(
+          uri,
+          httpHeaders: widget.httpHeaders.isEmpty ? null : widget.httpHeaders,
+        ),
+        play: true,
+      );
       await _player.setRate(_playbackSpeed);
       // Start without subtitles; preferences are applied once tracks load.
       if (!_userPickedSubtitle) await _player.setSubtitleTrack(SubtitleTrack.no());
@@ -151,7 +193,12 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
       _scheduleHideControls();
       unawaited(_applyTrackPreferences());
     } catch (e) {
-      if (mounted) setState(() => _error = 'No se puede reproducir este archivo.\n$e');
+      _initializingPlayer = false;
+      if (mounted && !_tryNextLiveSource()) {
+        setState(() => _error = widget.isLive
+            ? 'Este canal no está disponible ahora mismo.'
+            : 'No se puede reproducir este archivo.\n$e');
+      }
     } finally {
       _initializingPlayer = false;
     }
@@ -163,6 +210,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
       _initialized = false;
       _openedSource = null;
     });
+    _liveSourceIndex = 0;
     if (!_isStreamingMode) await _initPlayer(widget.filePath);
   }
 
@@ -192,7 +240,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   }
 
   Future<void> _maybeResume(Duration duration) async {
-    if (_resumeChecked || duration <= Duration.zero) return;
+    if (widget.isLive || _resumeChecked || duration <= Duration.zero) return;
     _resumeChecked = true;
     final key = _positionKeyCache = _computePositionKey();
     final prefs = _prefs ?? await SharedPreferences.getInstance();
@@ -352,6 +400,12 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   }) {
     final speed = torrent?.downloadSpeed ?? 0;
     final peers = torrent?.peers ?? 0;
+    // mpv reports how full its cache is while buffering; before the video
+    // opens there is nothing to measure, so the bar just sweeps.
+    final percent = _player.state.bufferingPercentage;
+    final progress = _initialized && _player.state.buffering && percent > 0
+        ? percent / 100
+        : null;
     final headline = !hasStream
         ? 'Preparando la reproducción...'
         : _isStreamingMode && peers == 0
@@ -371,18 +425,10 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            const SizedBox(
-              width: 56,
-              height: 56,
-              child: CircularProgressIndicator(
-                strokeWidth: 4,
-                backgroundColor: Colors.white12,
-                color: AppTheme.primary,
-              ),
-            ),
-            const SizedBox(height: 24),
             Text(
-              headline,
+              progress != null
+                  ? '$headline ${(progress * 100).round()} %'
+                  : headline,
               style: const TextStyle(
                 color: Colors.white,
                 fontSize: 16,
@@ -400,8 +446,10 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                 overflow: TextOverflow.ellipsis,
               ),
             ),
+            const SizedBox(height: 24),
+            LoadingBar(value: progress),
             if (details.isNotEmpty) ...[
-              const SizedBox(height: 16),
+              const SizedBox(height: 12),
               Text(
                 details,
                 style: const TextStyle(color: Colors.white38, fontSize: 12),
@@ -740,6 +788,19 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   }
 
   Widget _buildTransportControls() {
+    if (widget.isLive) {
+      return _ControlIconButton(
+        icon: _player.state.playing
+            ? Icons.pause_circle_filled_rounded
+            : Icons.play_circle_filled_rounded,
+        size: 58,
+        onPressed: () {
+          unawaited(_player.playOrPause());
+          setState(() {});
+          _scheduleHideControls();
+        },
+      );
+    }
     return FittedBox(
       fit: BoxFit.scaleDown,
       child: Row(
@@ -783,6 +844,12 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
         child: Column(
           children: [
+            if (widget.isLive)
+              const Align(
+                alignment: Alignment.centerLeft,
+                child: _LiveBadge(),
+              )
+            else ...[
             SliderTheme(
               data: SliderTheme.of(context).copyWith(
                 activeTrackColor: AppTheme.primary,
@@ -827,6 +894,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                 ],
               ),
             ),
+            ],
             const SizedBox(height: 8),
             Row(
               children: [
@@ -970,6 +1038,38 @@ class _TrackMenuItem extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+/// Red "EN DIRECTO" label shown instead of the seek bar for live TV.
+class _LiveBadge extends StatelessWidget {
+  const _LiveBadge();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        color: const Color(0xFFE53935),
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: const Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.circle, size: 8, color: Colors.white),
+          SizedBox(width: 6),
+          Text(
+            'EN DIRECTO',
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 12,
+              fontWeight: FontWeight.w800,
+              letterSpacing: 0.8,
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
