@@ -520,7 +520,8 @@ class _CastRow extends StatelessWidget {
       children: [
         const RowTitle('Reparto'),
         HorizontalScroller(
-          height: 190 * scale,
+          // Photo + two-line name + character, with the scaled text.
+          height: 215 * scale,
           spacing: 18 * scale,
           itemCount: cast.length,
           itemBuilder: (_, i) {
