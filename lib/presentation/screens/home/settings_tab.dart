@@ -6,17 +6,19 @@ import 'addons_section.dart';
 import '../../widgets/tmdb_key_dialog.dart';
 import '../../../core/constants/app_constants.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/utils/file_size_formatter.dart';
 import '../../../data/models/app_language.dart';
 import '../../providers/settings_providers.dart';
 import '../../providers/torrent_providers.dart';
 
-/// Settings tab displayed as the third tab in [HomeScreen].
+/// Ajustes, opened from the gear in [HomeScreen]'s top bar.
 class SettingsTab extends ConsumerWidget {
   const SettingsTab({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final torrents = ref.watch(torrentsProvider);
+    final cacheBytes = torrents.fold<int>(0, (sum, t) => sum + t.downloadedSize);
     final currentLang = ref.watch(languagePreferenceProvider);
 
     return ListView(
@@ -24,8 +26,6 @@ class SettingsTab extends ConsumerWidget {
       children: [
         const SizedBox(height: 4),
         _buildAppInfo(),
-        const SizedBox(height: 20),
-        _buildStatsSection(torrents.length),
         const SizedBox(height: 20),
         _buildSection(
           title: 'Preferencias',
@@ -57,7 +57,7 @@ class SettingsTab extends ConsumerWidget {
                 icon: Icons.vpn_key_rounded,
                 title: 'Clave de API de TMDB',
                 subtitle: ref.watch(tmdbApiKeyProvider).isEmpty
-                    ? 'Sin configurar: necesaria para Descubrir'
+                    ? 'Sin configurar: necesaria para Cine y Series'
                     : 'Configurada',
                 trailing: const Icon(
                   Icons.chevron_right_rounded,
@@ -71,57 +71,23 @@ class SettingsTab extends ConsumerWidget {
         const AddonsSection(),
         const SizedBox(height: 20),
         _buildSection(
-          title: 'Red',
-          children: const [
-            _SettingsTile(
-              icon: Icons.speed_rounded,
-              title: 'Límite de descarga',
-              subtitle: 'Sin límite',
-              trailing: Text(
-                'Sin límite',
-                style: TextStyle(
-                  color: AppTheme.onSurfaceVariant,
-                  fontSize: 13,
-                ),
-              ),
-            ),
-            _SettingsTile(
-              icon: Icons.upload_rounded,
-              title: 'Límite de subida',
-              subtitle: 'Sin límite',
-              trailing: Text(
-                'Sin límite',
-                style: TextStyle(
-                  color: AppTheme.onSurfaceVariant,
-                  fontSize: 13,
-                ),
-              ),
-            ),
-            _SettingsTile(
-              icon: Icons.router_rounded,
-              title: 'Red DHT',
-              subtitle: 'Activada',
-              trailing: Icon(
-                Icons.check_circle_rounded,
-                color: AppTheme.success,
-                size: 18,
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 20),
-        _buildSection(
           title: 'Almacenamiento',
-          children: const [
-            _SettingsTile(
-              icon: Icons.folder_rounded,
-              title: 'Ubicación de descargas',
-              subtitle: '/storage/emulated/0/Download/Bitdrix',
-            ),
-            _SettingsTile(
-              icon: Icons.delete_sweep_rounded,
-              title: 'Borrar completados',
-              subtitle: 'Quita de la lista los torrents completados',
+          children: [
+            InkWell(
+              onTap: torrents.isEmpty ? null : () => _freeSpace(context, ref),
+              child: _SettingsTile(
+                icon: Icons.cleaning_services_rounded,
+                title: 'Liberar espacio',
+                subtitle: torrents.isEmpty
+                    ? 'No hay vídeos guardados'
+                    : 'Borra los vídeos guardados para ver al momento '
+                        '(${FileSizeFormatter.format(cacheBytes)}). Los de '
+                        'más de 7 días se borran solos.',
+                trailing: const Icon(
+                  Icons.chevron_right_rounded,
+                  color: AppTheme.onSurfaceVariant,
+                ),
+              ),
             ),
           ],
         ),
@@ -144,12 +110,42 @@ class SettingsTab extends ConsumerWidget {
             const _SettingsTile(
               icon: Icons.code_rounded,
               title: 'Hecho con Flutter',
-              subtitle: 'libtorrent4j · Clean Architecture · Riverpod',
+              subtitle: 'Flutter · media_kit · addons de Stremio',
             ),
           ],
         ),
       ],
     );
+  }
+
+  Future<void> _freeSpace(BuildContext context, WidgetRef ref) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('¿Liberar espacio?'),
+        content: const Text(
+          'Se borrarán los vídeos guardados. Lo que estés viendo se '
+          'volverá a cargar la próxima vez que lo abras.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Liberar'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    await ref.read(torrentsProvider.notifier).removeEverything();
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Espacio liberado.')),
+      );
+    }
   }
 
   void _showLanguagePicker(BuildContext context, WidgetRef ref) {
@@ -252,33 +248,6 @@ class SettingsTab extends ConsumerWidget {
       ),
     );
   }
-
-  Widget _buildStatsSection(int torrentCount) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: AppTheme.cardColor,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0xFF222233)),
-      ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-        children: [
-          _StatItem(label: 'Torrents', value: torrentCount.toString()),
-          _divider(),
-          const _StatItem(label: 'Estado', value: 'Activos'),
-          _divider(),
-          const _StatItem(label: 'Motor', value: 'libtorrent'),
-        ],
-      ),
-    );
-  }
-
-  Widget _divider() => Container(
-        width: 1,
-        height: 32,
-        color: const Color(0xFF333348),
-      );
 
   Widget _buildSection({
     required String title,
@@ -456,38 +425,6 @@ class _LanguagePickerSheet extends StatelessWidget {
           },
         ),
         const SizedBox(height: 16),
-      ],
-    );
-  }
-}
-
-// ── Stat item ─────────────────────────────────────────────────────────────────
-
-class _StatItem extends StatelessWidget {
-  const _StatItem({required this.label, required this.value});
-  final String label;
-  final String value;
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      children: [
-        Text(
-          value,
-          style: const TextStyle(
-            color: AppTheme.primary,
-            fontSize: 20,
-            fontWeight: FontWeight.w800,
-          ),
-        ),
-        const SizedBox(height: 2),
-        Text(
-          label,
-          style: const TextStyle(
-            color: AppTheme.onSurfaceVariant,
-            fontSize: 12,
-          ),
-        ),
       ],
     );
   }

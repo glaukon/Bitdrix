@@ -110,6 +110,29 @@ class TorrentNotifier extends Notifier<List<TorrentEntity>> {
     await ref.read(removeTorrentUseCaseProvider).call(id, deleteFiles: deleteFiles);
   }
 
+  /// Deletes, with their files, the torrents added more than [age] ago.
+  /// Downloads are a hidden cache, so this is what keeps it from growing.
+  Future<int> removeOlderThan(Duration age) async {
+    final cutoff = DateTime.now().subtract(age);
+    return _removeAll(state.where((t) => t.addedAt.isBefore(cutoff)));
+  }
+
+  /// Deletes every torrent and its files ("Liberar espacio").
+  Future<int> removeEverything() => _removeAll(List.of(state));
+
+  Future<int> _removeAll(Iterable<TorrentEntity> torrents) async {
+    var removed = 0;
+    for (final t in torrents.toList()) {
+      try {
+        await remove(t.id, deleteFiles: true);
+        removed++;
+      } catch (_) {
+        // A torrent the engine cannot drop now is retried next time.
+      }
+    }
+    return removed;
+  }
+
   Future<void> selectFileForStreaming(String torrentId, String fileId) async {
     await ref
         .read(torrentRepositoryProvider)

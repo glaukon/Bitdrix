@@ -110,13 +110,18 @@ class MediaModel {
     );
   }
 
+  /// The inverse of [MediaModel.fromJson]: TV shows use TMDB's `name` and
+  /// `first_air_date` keys, movies `title` and `release_date`.
   Map<String, dynamic> toJson() => {
         'id': id,
-        'title': title,
+        if (mediaType == 'tv') 'name': title else 'title': title,
         'overview': overview,
         'poster_path': posterPath,
         'backdrop_path': backdropPath,
-        'release_date': releaseDate,
+        if (mediaType == 'tv')
+          'first_air_date': releaseDate
+        else
+          'release_date': releaseDate,
         'vote_average': voteAverage,
         'media_type': mediaType,
         'imdb_id': imdbId,

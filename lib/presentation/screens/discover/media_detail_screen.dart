@@ -9,6 +9,7 @@ import '../../../data/models/media_model.dart';
 import '../../../data/models/stream_source_model.dart';
 import '../../providers/settings_providers.dart';
 import '../../providers/discover_providers.dart';
+import '../../providers/favorites_providers.dart';
 import '../../providers/torrent_providers.dart';
 import '../../widgets/horizontal_scroller.dart';
 import '../../widgets/selectable_chip.dart';
@@ -76,6 +77,7 @@ class MediaDetailScreen extends ConsumerWidget {
           ),
         ),
       ),
+      actions: [_FavoriteButton(media: media)],
       flexibleSpace: FlexibleSpaceBar(
         background: _BackdropImage(media: media),
       ),
@@ -84,6 +86,45 @@ class MediaDetailScreen extends ConsumerWidget {
 }
 
 // ── Backdrop ──────────────────────────────────────────────────────────────────
+
+/// Adds the title to Favoritos, or takes it out.
+class _FavoriteButton extends ConsumerWidget {
+  const _FavoriteButton({required this.media});
+
+  final MediaModel media;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    ref.watch(favoriteMediaProvider);
+    final favorites = ref.read(favoriteMediaProvider.notifier);
+    final favorite = favorites.isFavorite(media);
+    return Padding(
+      padding: const EdgeInsets.all(8),
+      child: Material(
+        color: Colors.black54,
+        shape: const CircleBorder(),
+        child: IconButton(
+          tooltip: favorite ? 'Quitar de favoritos' : 'Añadir a favoritos',
+          icon: Icon(
+            favorite ? Icons.star_rounded : Icons.star_outline_rounded,
+            color: favorite ? Colors.amber : Colors.white,
+          ),
+          onPressed: () {
+            favorites.toggle(media);
+            ScaffoldMessenger.of(context)
+              ..hideCurrentSnackBar()
+              ..showSnackBar(SnackBar(
+                duration: const Duration(seconds: 2),
+                content: Text(favorite
+                    ? 'Quitado de favoritos'
+                    : 'Añadido a favoritos'),
+              ));
+          },
+        ),
+      ),
+    );
+  }
+}
 
 class _BackdropImage extends StatelessWidget {
   const _BackdropImage({required this.media});

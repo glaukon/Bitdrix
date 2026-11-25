@@ -1,23 +1,18 @@
 import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 
 import '../../../core/theme/app_theme.dart';
-import '../../../data/models/media_model.dart';
 import '../../../data/services/tmdb_service.dart';
 import '../../providers/discover_providers.dart';
 import '../../providers/settings_providers.dart';
-import '../../widgets/horizontal_scroller.dart';
+import '../../widgets/media_rows.dart';
 import '../../widgets/tmdb_key_dialog.dart';
 import 'widgets/media_card.dart';
 
 /// Maximum width of a poster card in the search-results grid.
 const double _kCardMaxWidth = 180;
-
-/// Width of a poster card in the horizontal rows.
-const double _kRowCardWidth = 140;
 
 /// The Cine (`mediaType: 'movie'`) or Series (`'tv'`) tab: a featured title,
 /// then rows of TMDB lists; typing searches only that kind of title.
@@ -163,168 +158,12 @@ class _BrowseView extends ConsumerWidget {
             physics: const AlwaysScrollableScrollPhysics(),
             padding: const EdgeInsets.only(bottom: 24),
             children: [
-              if (featured != null) _FeaturedBanner(media: featured),
-              for (final list in lists) _CatalogRow(list: list),
+              if (featured != null) FeaturedBanner(media: featured),
+              for (final list in lists) CatalogListRow(list: list),
             ],
           ),
         );
       },
-    );
-  }
-}
-
-/// The top trending title, large, with its backdrop and synopsis.
-class _FeaturedBanner extends StatelessWidget {
-  const _FeaturedBanner({required this.media});
-
-  final MediaModel media;
-
-  @override
-  Widget build(BuildContext context) {
-    void open() => context.push('/discover/${media.id}', extra: media);
-
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
-      child: Material(
-        color: AppTheme.cardColor,
-        clipBehavior: Clip.antiAlias,
-        borderRadius: BorderRadius.circular(16),
-        child: InkWell(
-          onTap: open,
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxHeight: 340),
-            child: AspectRatio(
-              aspectRatio: 16 / 7,
-              child: Stack(
-                fit: StackFit.expand,
-                children: [
-                  Image.network(
-                    media.backdropUrl!,
-                    fit: BoxFit.cover,
-                    alignment: Alignment.topCenter,
-                    errorBuilder: (_, _, _) => const SizedBox.shrink(),
-                  ),
-                  const DecoratedBox(
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        begin: Alignment.centerLeft,
-                        end: Alignment.centerRight,
-                        colors: [Color(0xF00A0A12), Color(0x000A0A12)],
-                        stops: [0.0, 0.75],
-                      ),
-                    ),
-                  ),
-                  Padding(
-                    padding: const EdgeInsets.all(20),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisAlignment: MainAxisAlignment.end,
-                      children: [
-                        const Text(
-                          'DESTACADO HOY',
-                          style: TextStyle(
-                            color: AppTheme.accent,
-                            fontSize: 11,
-                            fontWeight: FontWeight.w800,
-                            letterSpacing: 1.4,
-                          ),
-                        ),
-                        const SizedBox(height: 6),
-                        FractionallySizedBox(
-                          widthFactor: 0.6,
-                          child: Text(
-                            media.displayTitle,
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 26,
-                              fontWeight: FontWeight.w800,
-                              height: 1.15,
-                            ),
-                          ),
-                        ),
-                        if (media.overview?.isNotEmpty ?? false) ...[
-                          const SizedBox(height: 8),
-                          FractionallySizedBox(
-                            widthFactor: 0.6,
-                            child: Text(
-                              media.overview!,
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                color: Colors.white70,
-                                fontSize: 13,
-                                height: 1.35,
-                              ),
-                            ),
-                          ),
-                        ],
-                        const SizedBox(height: 14),
-                        FilledButton.icon(
-                          onPressed: open,
-                          icon: const Icon(Icons.play_arrow_rounded),
-                          label: const Text('Ver fuentes'),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/// One titled, horizontally scrolling row of posters.
-class _CatalogRow extends ConsumerWidget {
-  const _CatalogRow({required this.list});
-
-  final CatalogList list;
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final items = ref.watch(catalogListProvider(list)).value;
-    // Rows that fail or come back empty are simply left out.
-    if (items != null && items.isEmpty) return const SizedBox.shrink();
-
-    const posterHeight = _kRowCardWidth * 3 / 2;
-    const rowHeight = posterHeight + 44;
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 10),
-          child: Text(
-            list.title,
-            style: const TextStyle(
-              color: AppTheme.onBackground,
-              fontSize: 18,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-        ),
-        items == null
-            ? const SizedBox(
-                height: rowHeight,
-                child: Center(
-                  child: CircularProgressIndicator(color: AppTheme.primary),
-                ),
-              )
-            : HorizontalScroller(
-                height: rowHeight,
-                spacing: 12,
-                itemCount: items.length,
-                itemBuilder: (_, i) => SizedBox(
-                  width: _kRowCardWidth,
-                  child: MediaCard(media: items[i]),
-                ),
-              ),
-      ],
     );
   }
 }

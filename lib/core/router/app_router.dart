@@ -5,6 +5,7 @@ import '../../data/models/media_model.dart';
 import '../../presentation/screens/add_torrent/add_torrent_screen.dart';
 import '../../presentation/screens/discover/media_detail_screen.dart';
 import '../../presentation/screens/home/home_screen.dart';
+import '../../presentation/screens/home/settings_tab.dart';
 import '../../presentation/screens/player/player_screen.dart';
 import '../../presentation/screens/player/prepare_screen.dart';
 import '../../presentation/screens/torrent_detail/torrent_detail_screen.dart';
@@ -27,6 +28,15 @@ final appRouter = GoRouter(
       path: '/',
       name: 'home',
       builder: (context, state) => const HomeScreen(),
+    ),
+
+    GoRoute(
+      path: '/settings',
+      name: 'settings',
+      builder: (context, state) => Scaffold(
+        appBar: AppBar(title: const Text('Ajustes')),
+        body: const SettingsTab(),
+      ),
     ),
 
     // ── Torrent routes ───────────────────────────────────────────────────────

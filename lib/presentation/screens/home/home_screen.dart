@@ -1,14 +1,17 @@
-import 'package:material_ui/material_ui.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
+import 'package:material_ui/material_ui.dart';
 
 import '../../../core/constants/app_constants.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../providers/torrent_providers.dart';
 import '../discover/catalog_screen.dart';
+import '../favorites/favorites_screen.dart';
 import '../tv/tv_screen.dart';
-import 'downloads_screen.dart';
-import 'settings_tab.dart';
+import 'start_screen.dart';
 
+/// The app shell: Inicio, TV, Cine, Series and Favoritos. Downloads run in
+/// the background and are never shown; Ajustes opens from the top bar.
 class HomeScreen extends ConsumerStatefulWidget {
   const HomeScreen({super.key});
 
@@ -17,16 +20,18 @@ class HomeScreen extends ConsumerStatefulWidget {
 }
 
 class _HomeScreenState extends ConsumerState<HomeScreen> {
-  /// Opens on Cine, the main use of the app.
-  int _currentIndex = 1;
+  int _currentIndex = 0;
 
   /// From this width on (desktop, tablets in landscape) the tabs move to a
   /// side rail instead of the bottom bar.
   static const _railBreakpoint = 840.0;
 
-  static const _downloadsIndex = 3;
-
   static const List<_TabInfo> _tabs = [
+    _TabInfo(
+      label: 'Inicio',
+      icon: Icons.home_outlined,
+      activeIcon: Icons.home_rounded,
+    ),
     _TabInfo(
       label: 'TV',
       icon: Icons.live_tv_outlined,
@@ -43,76 +48,55 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       activeIcon: Icons.tv_rounded,
     ),
     _TabInfo(
-      label: 'Descargas',
-      icon: Icons.download_outlined,
-      activeIcon: Icons.download_rounded,
-    ),
-    _TabInfo(
-      label: 'Ajustes',
-      icon: Icons.settings_outlined,
-      activeIcon: Icons.settings_rounded,
+      label: 'Favoritos',
+      icon: Icons.star_outline_rounded,
+      activeIcon: Icons.star_rounded,
     ),
   ];
 
   static const List<Widget> _screens = [
+    StartScreen(),
     TvScreen(),
     CatalogScreen(mediaType: 'movie'),
     CatalogScreen(mediaType: 'tv'),
-    DownloadsScreen(),
-    SettingsTab(),
+    FavoritesScreen(),
   ];
 
   @override
+  void initState() {
+    super.initState();
+    // Watched videos are kept for a while (to resume or rewatch quickly);
+    // the old ones go so the hidden cache does not fill the disk.
+    Future<void>.delayed(const Duration(seconds: 20), () {
+      if (mounted) {
+        ref
+            .read(torrentsProvider.notifier)
+            .removeOlderThan(const Duration(days: 7));
+      }
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final activeCount = ref.watch(activeCountProvider);
     final wide = MediaQuery.sizeOf(context).width >= _railBreakpoint;
     final body = IndexedStack(index: _currentIndex, children: _screens);
 
     return Scaffold(
-      appBar: _buildAppBar(activeCount),
+      appBar: _buildAppBar(),
       body: wide
           ? Row(
               children: [
-                _buildRail(activeCount),
+                _buildRail(),
                 const VerticalDivider(width: 1, color: Color(0xFF222233)),
                 Expanded(child: body),
               ],
             )
           : body,
-      bottomNavigationBar: wide ? null : _buildBottomNav(activeCount),
+      bottomNavigationBar: wide ? null : _buildBottomNav(),
     );
   }
 
-  /// The tab icon, with a counter of active downloads on Descargas.
-  Widget _tabIcon(int index, {required bool selected, required int active}) {
-    final tab = _tabs[index];
-    final icon = Icon(selected ? tab.activeIcon : tab.icon);
-    if (index != _downloadsIndex || active == 0) return icon;
-    return Badge(
-      label: Text('$active'),
-      backgroundColor: AppTheme.accent,
-      child: icon,
-    );
-  }
-
-  Widget _buildRail(int activeCount) {
-    return NavigationRail(
-      selectedIndex: _currentIndex,
-      onDestinationSelected: (index) => setState(() => _currentIndex = index),
-      labelType: NavigationRailLabelType.all,
-      backgroundColor: AppTheme.surface,
-      destinations: [
-        for (var i = 0; i < _tabs.length; i++)
-          NavigationRailDestination(
-            icon: _tabIcon(i, selected: false, active: activeCount),
-            selectedIcon: _tabIcon(i, selected: true, active: activeCount),
-            label: Text(_tabs[i].label),
-          ),
-      ],
-    );
-  }
-
-  PreferredSizeWidget _buildAppBar(int activeCount) {
+  PreferredSizeWidget _buildAppBar() {
     return AppBar(
       title: Row(
         children: [
@@ -128,9 +112,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
               borderRadius: BorderRadius.circular(8),
             ),
             child: const Icon(
-              Icons.downloading_rounded,
+              Icons.play_arrow_rounded,
               color: Colors.white,
-              size: 18,
+              size: 20,
             ),
           ),
           const SizedBox(width: 10),
@@ -146,59 +130,44 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         ],
       ),
       actions: [
-        if (activeCount > 0)
-          Padding(
-            padding: const EdgeInsets.only(right: 4),
-            child: Center(
-              child: Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                decoration: BoxDecoration(
-                  color: AppTheme.accent.withAlpha(26),
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(
-                    color: AppTheme.accent.withAlpha(77),
-                    width: 1,
-                  ),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Icon(
-                      Icons.downloading_rounded,
-                      color: AppTheme.accent,
-                      size: 14,
-                    ),
-                    const SizedBox(width: 4),
-                    Text(
-                      '$activeCount',
-                      style: const TextStyle(
-                        color: AppTheme.accent,
-                        fontSize: 13,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
+        IconButton(
+          tooltip: 'Ajustes',
+          icon: const Icon(Icons.settings_rounded),
+          onPressed: () => context.push('/settings'),
+        ),
         const SizedBox(width: 8),
       ],
     );
   }
 
-  Widget _buildBottomNav(int activeCount) {
+  Widget _buildRail() {
+    return NavigationRail(
+      selectedIndex: _currentIndex,
+      onDestinationSelected: (index) => setState(() => _currentIndex = index),
+      labelType: NavigationRailLabelType.all,
+      backgroundColor: AppTheme.surface,
+      destinations: [
+        for (final tab in _tabs)
+          NavigationRailDestination(
+            icon: Icon(tab.icon),
+            selectedIcon: Icon(tab.activeIcon),
+            label: Text(tab.label),
+          ),
+      ],
+    );
+  }
+
+  Widget _buildBottomNav() {
     return NavigationBar(
       selectedIndex: _currentIndex,
       onDestinationSelected: (index) =>
           setState(() => _currentIndex = index),
       destinations: [
-        for (var i = 0; i < _tabs.length; i++)
+        for (final tab in _tabs)
           NavigationDestination(
-            icon: _tabIcon(i, selected: false, active: activeCount),
-            selectedIcon: _tabIcon(i, selected: true, active: activeCount),
-            label: _tabs[i].label,
+            icon: Icon(tab.icon),
+            selectedIcon: Icon(tab.activeIcon),
+            label: tab.label,
           ),
       ],
     );

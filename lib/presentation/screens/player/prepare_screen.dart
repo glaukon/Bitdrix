@@ -118,9 +118,14 @@ class _PrepareScreenState extends ConsumerState<PrepareScreen> {
 
   Future<void> _cancel() async {
     // The torrent was only added to watch it now: drop it and its data.
-    await ref
-        .read(torrentsProvider.notifier)
-        .remove(widget.torrentId, deleteFiles: true);
+    // Leaving must never depend on that working.
+    try {
+      await ref
+          .read(torrentsProvider.notifier)
+          .remove(widget.torrentId, deleteFiles: true);
+    } catch (e) {
+      debugPrint('Could not remove torrent ${widget.torrentId}: $e');
+    }
     if (mounted) context.pop();
   }
 
@@ -286,12 +291,6 @@ class _PrepareScreenState extends ConsumerState<PrepareScreen> {
                 onPressed: _retry,
                 icon: const Icon(Icons.refresh_rounded),
                 label: const Text('Reintentar'),
-              ),
-            if (torrent != null && _error != null && torrent.files.isNotEmpty)
-              TextButton(
-                onPressed: () =>
-                    context.pushReplacement('/torrents/${torrent.id}'),
-                child: const Text('Ver archivos'),
               ),
           ],
         ),

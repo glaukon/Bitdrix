@@ -313,7 +313,25 @@ class RqbitTorrentService extends BaseTorrentService {
   @override
   Future<void> remove(String torrentId, {bool deleteFiles = false}) async {
     if (!torrentId.startsWith('pending-')) {
-      await _dio.post<dynamic>('/torrents/$torrentId/${deleteFiles ? 'delete' : 'forget'}');
+      try {
+        await _dio.post<dynamic>(
+            '/torrents/$torrentId/${deleteFiles ? 'delete' : 'forget'}');
+      } on DioException catch (e) {
+        // rqbit answers 500 when it cannot delete the files yet (torrent
+        // still initialising, a file locked by Windows…) and 404 when the
+        // torrent is already gone. Take it out of the session anyway so it
+        // does not linger in the list.
+        final status = e.response?.statusCode;
+        if (status == 404) {
+          // Already removed: nothing else to do.
+        } else if (deleteFiles && status == 500) {
+          try {
+            await _dio.post<dynamic>('/torrents/$torrentId/forget');
+          } on DioException catch (_) {}
+        } else {
+          rethrow;
+        }
+      }
     }
     drop(torrentId);
     _filesLoaded.remove(torrentId);
