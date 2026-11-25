@@ -66,8 +66,13 @@ flutter {
 }
 
 dependencies {
-    // libtorrent4j — real BitTorrent engine for Android
-    // Add other ABIs (arm, x86, x86_64) for production builds
-    implementation "org.libtorrent4j:libtorrent4j-android-arm64:2.1.0-39"
-    implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3"
+    // libtorrent4j — real BitTorrent engine for Android (all ABIs: phones, old
+    // 32-bit devices and x86 emulators)
+    def libtorrent4jVersion = "2.1.0-39"
+    implementation "org.libtorrent4j:libtorrent4j-android-arm64:$libtorrent4jVersion"
+    implementation "org.libtorrent4j:libtorrent4j-android-arm:$libtorrent4jVersion"
+    implementation "org.libtorrent4j:libtorrent4j-android-x86_64:$libtorrent4jVersion"
+    implementation "org.libtorrent4j:libtorrent4j-android-x86:$libtorrent4jVersion"
+    implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2"
+    implementation "androidx.core:core-ktx:1.16.0"
 }

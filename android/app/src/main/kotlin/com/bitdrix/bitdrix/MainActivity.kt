@@ -17,65 +17,55 @@ class MainActivity : FlutterActivity() {
         private const val MEDIA_TRACKS_CH = "com.bitdrix.bitdrix/media_tracks"
     }
 
-    private var torrentEngine: TorrentEngine? = null
+    private lateinit var torrentEngine: TorrentEngine
     private var eventSink: EventChannel.EventSink? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
 
-        torrentEngine = TorrentEngine(applicationContext).apply {
-            onUpdate = { json ->
-                runOnUiThread {
-                    if (eventSink == null) Log.w("BitdrixTorrent", "eventSink NULL — event dropped")
-                    eventSink?.success(json)
-                }
-            }
-        }
+        // The engine is process-wide: it keeps running (with the foreground
+        // service) after this Activity is destroyed.
+        torrentEngine = TorrentEngine.get(applicationContext)
+        torrentEngine.onUpdate = { json -> runOnUiThread { eventSink?.success(json) } }
 
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, METHOD_CH)
             .setMethodCallHandler { call, result ->
-                val eng = torrentEngine ?: return@setMethodCallHandler result.error(
-                    "ENGINE_NULL", "TorrentEngine not initialised", null
-                )
-                when (call.method) {
-                    "addTorrentFile" -> {
-                        eng.addTorrentFile(
-                            call.argument<String>("filePath")!!,
-                            call.argument<String>("id")!!
+                val eng = torrentEngine
+                try {
+                    when (call.method) {
+                        "addTorrentFile" -> {
+                            eng.addTorrentFile(call.argument<String>("filePath")!!, call.argument<String>("id")!!)
+                            result.success(null)
+                        }
+                        "addMagnet" -> {
+                            eng.addMagnet(call.argument<String>("magnet")!!, call.argument<String>("id")!!)
+                            result.success(null)
+                        }
+                        "pause" -> {
+                            eng.pause(call.argument<String>("id")!!)
+                            result.success(null)
+                        }
+                        "resume" -> {
+                            eng.resume(call.argument<String>("id")!!)
+                            result.success(null)
+                        }
+                        "remove" -> {
+                            eng.remove(call.argument<String>("id")!!, call.argument<Boolean>("deleteFiles") ?: false)
+                            result.success(null)
+                        }
+                        "refresh" -> {
+                            eng.refresh()
+                            result.success(null)
+                        }
+                        "getFiles" -> result.success(eng.getFiles(call.argument<String>("id")!!))
+                        "selectFile" -> result.success(
+                            eng.selectFile(call.argument<String>("id")!!, call.argument<String>("fileId")!!)
                         )
-                        result.success(null)
+                        else -> result.notImplemented()
                     }
-                    "addMagnet" -> {
-                        eng.addMagnet(
-                            call.argument<String>("magnet")!!,
-                            call.argument<String>("id")!!
-                        )
-                        result.success(null)
-                    }
-                    "pause" -> {
-                        eng.pause(call.argument<String>("id")!!)
-                        result.success(null)
-                    }
-                    "resume" -> {
-                        eng.resume(call.argument<String>("id")!!)
-                        result.success(null)
-                    }
-                    "remove" -> {
-                        eng.remove(
-                            call.argument<String>("id")!!,
-                            call.argument<Boolean>("deleteFiles") ?: false
-                        )
-                        result.success(null)
-                    }
-                    "getFiles" -> result.success(eng.getFiles(call.argument<String>("id")!!))
-                    "selectFile" -> {
-                        val streamUrl = eng.selectFile(
-                            call.argument<String>("id")!!,
-                            call.argument<String>("fileId")!!
-                        )
-                        result.success(streamUrl)
-                    }
-                    else -> result.notImplemented()
+                } catch (e: Exception) {
+                    Log.e("BitdrixTorrent", "${call.method} failed", e)
+                    result.error("TORRENT_ERROR", e.message, null)
                 }
             }
 
@@ -99,6 +89,8 @@ class MainActivity : FlutterActivity() {
             .setStreamHandler(object : EventChannel.StreamHandler {
                 override fun onListen(args: Any?, sink: EventChannel.EventSink?) {
                     eventSink = sink
+                    // Push the restored torrents to Dart straight away.
+                    torrentEngine.refresh()
                 }
                 override fun onCancel(args: Any?) {
                     eventSink = null
@@ -160,9 +152,15 @@ class MainActivity : FlutterActivity() {
         return listOfNotNull("Audio ${position + 1}", lang, codec).joinToString(" · ")
     }
 
+    override fun onStop() {
+        super.onStop()
+        if (::torrentEngine.isInitialized) torrentEngine.saveAll()
+    }
+
     override fun onDestroy() {
-        torrentEngine?.dispose()
-        torrentEngine = null
+        // Detach from the engine but keep it running for background downloads.
+        if (::torrentEngine.isInitialized) torrentEngine.onUpdate = null
+        eventSink = null
         super.onDestroy()
     }
 }

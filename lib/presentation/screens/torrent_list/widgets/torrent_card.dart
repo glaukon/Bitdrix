@@ -169,7 +169,7 @@ class TorrentCard extends ConsumerWidget {
         const Spacer(),
         if (eta != null && torrent.status == TorrentStatus.downloading)
           Text(
-            'ETA $eta',
+            'Restante: $eta',
             style: const TextStyle(
               color: AppTheme.onSurfaceVariant,
               fontSize: 11,
@@ -177,7 +177,7 @@ class TorrentCard extends ConsumerWidget {
           ),
         const SizedBox(width: 8),
         Text(
-          '${torrent.seeds} seeds',
+          '${torrent.seeds} semillas',
           style: const TextStyle(
             color: AppTheme.onSurfaceVariant,
             fontSize: 11,
@@ -203,7 +203,7 @@ class TorrentCard extends ConsumerWidget {
           Icon(Icons.delete_outline_rounded, color: AppTheme.error, size: 24),
           SizedBox(height: 4),
           Text(
-            'Remove',
+            'Eliminar',
             style: TextStyle(
               color: AppTheme.error,
               fontSize: 11,
@@ -219,19 +219,19 @@ class TorrentCard extends ConsumerWidget {
     return showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Remove Torrent'),
+        title: const Text('Eliminar torrent'),
         content: Text(
-          'Remove "${torrent.name}" from the list?',
+          '¿Quitar "${torrent.name}" de la lista?',
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancel'),
+            child: const Text('Cancelar'),
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
             style: TextButton.styleFrom(foregroundColor: AppTheme.error),
-            child: const Text('Remove'),
+            child: const Text('Eliminar'),
           ),
         ],
       ),

@@ -1,110 +1,147 @@
-// Bitdrix WebTorrent JS bridge
-// Called from Dart via dart:js interop.
+// Bitdrix ⇄ WebTorrent bridge (called from Dart via dart:js_interop).
+//
+// WebTorrent is loaded as an ES module in index.html and exposed as
+// window.WebTorrent. Files are streamed through WebTorrent's service worker
+// (webtorrent.sw.min.js), which serves /webtorrent/<infoHash>/<path> URLs with
+// Range support and fetches the pieces each request needs.
 (function () {
   'use strict';
 
   var client = null;
-  var serverBaseUrl = null;
-  var torrents = {}; // uuid -> WebTorrent torrent object
+  var initPromise = null;
+  var torrents = {}; // Dart id -> WebTorrent torrent
 
-  // ── init ────────────────────────────────────────────────────────────────────
-  // Returns a Promise that resolves with the base streaming URL.
-  function init() {
-    if (client) return Promise.resolve(serverBaseUrl);
-
+  function waitForWebTorrent() {
+    if (window.WebTorrent) return Promise.resolve(window.WebTorrent);
     return new Promise(function (resolve, reject) {
-      try {
-        client = new WebTorrent();
-
-        client.on('error', function (err) {
-          console.error('[Bitdrix] WebTorrent client error:', err);
-        });
-
-        var server = client.createServer({ sw: '/webtorrent.sw.min.js' });
-
-        // The server may fire 'listening' or expose .url synchronously in
-        // different WebTorrent versions – handle both.
-        if (server.url) {
-          serverBaseUrl = server.url;
-          resolve(serverBaseUrl);
-        } else {
-          server.on('listening', function () {
-            serverBaseUrl = server.url || (window.location.origin);
-            resolve(serverBaseUrl);
-          });
-          server.on('error', function (err) {
-            // Fall back to origin-relative paths (SW mode)
-            serverBaseUrl = window.location.origin;
-            resolve(serverBaseUrl);
-          });
-          // Give the SW 3 s to register; fall back if it never fires.
-          setTimeout(function () {
-            if (!serverBaseUrl) {
-              serverBaseUrl = window.location.origin;
-              resolve(serverBaseUrl);
-            }
-          }, 3000);
-        }
-      } catch (e) {
-        reject(e.toString());
-      }
+      var timer = setTimeout(function () {
+        reject(new Error('WebTorrent library failed to load'));
+      }, 15000);
+      window.addEventListener('webtorrent-ready', function () {
+        clearTimeout(timer);
+        resolve(window.WebTorrent);
+      }, { once: true });
     });
   }
 
-  // ── addMagnet ───────────────────────────────────────────────────────────────
-  // onReady(jsonString)  called once metadata is fetched
-  // onError(message)     called on failure
-  function addMagnet(magnetLink, id, onReady, onError) {
-    if (!client) {
-      onError('WebTorrent client not initialised');
-      return;
-    }
-    try {
-      client.add(magnetLink, function (torrent) {
-        torrents[id] = torrent;
-
-        // Pick the first video file; fall back to file[0].
-        var videoFile = null;
-        for (var i = 0; i < torrent.files.length; i++) {
-          if (/\.(mp4|mkv|avi|mov|webm|m4v)$/i.test(torrent.files[i].name)) {
-            videoFile = torrent.files[i];
-            break;
-          }
-        }
-        if (!videoFile) videoFile = torrent.files[0];
-        var fileIndex = torrent.files.indexOf(videoFile);
-
-        var streamUrl = (serverBaseUrl || window.location.origin) +
-          '/' + torrent.infoHash + '/' + fileIndex;
-
-        onReady(JSON.stringify({
-          infoHash: torrent.infoHash,
-          name: torrent.name,
-          length: torrent.length || 0,
-          streamUrl: streamUrl,
-        }));
+  function init() {
+    if (initPromise) return initPromise;
+    initPromise = waitForWebTorrent().then(function (WebTorrent) {
+      client = new WebTorrent();
+      client.on('error', function (err) {
+        console.error('[Bitdrix] WebTorrent error:', err);
       });
-    } catch (e) {
-      onError(e.toString());
-    }
+      if (!('serviceWorker' in navigator)) {
+        console.warn('[Bitdrix] Service workers unavailable: streaming disabled');
+        return false;
+      }
+      return navigator.serviceWorker
+        .register('./webtorrent.sw.min.js', { scope: './' })
+        .then(function () { return navigator.serviceWorker.ready; })
+        .then(function (registration) {
+          // On the first visit the worker claims the page asynchronously;
+          // stream URLs only work once the page is controlled.
+          if (navigator.serviceWorker.controller) return registration;
+          return new Promise(function (resolve) {
+            var done = function () { resolve(registration); };
+            navigator.serviceWorker.addEventListener('controllerchange', done, { once: true });
+            setTimeout(done, 5000);
+          });
+        })
+        .then(function (registration) {
+          client.createServer({ controller: registration });
+          return !!navigator.serviceWorker.controller;
+        })
+        .catch(function (err) {
+          console.warn('[Bitdrix] Could not start the streaming worker:', err);
+          return false;
+        });
+    });
+    return initPromise;
   }
 
-  // ── getStatus ───────────────────────────────────────────────────────────────
+  function describe(torrent) {
+    return JSON.stringify({
+      infoHash: torrent.infoHash,
+      name: torrent.name || '',
+      length: torrent.length || 0,
+      files: torrent.files.map(function (f) {
+        return { name: f.name, path: f.path, length: f.length };
+      }),
+    });
+  }
+
+  function decodeDataUri(uri) {
+    var base64 = uri.substring(uri.indexOf('base64,') + 7);
+    var binary = atob(base64);
+    var bytes = new Uint8Array(binary.length);
+    for (var i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return bytes;
+  }
+
+  // source: magnet link, info hash or a data: URI holding a .torrent file.
+  function add(source, id, onReady, onError) {
+    init().then(function () {
+      var input = source.indexOf('data:') === 0 ? decodeDataUri(source) : source;
+      var existing = null;
+      try { existing = client.get(input); } catch (e) { existing = null; }
+      Promise.resolve(existing).then(function (found) {
+        if (found) {
+          torrents[id] = found;
+          if (found.ready) onReady(describe(found));
+          else found.once('ready', function () { onReady(describe(found)); });
+          return;
+        }
+        var torrent = client.add(input, function (t) {
+          onReady(describe(t));
+        });
+        torrents[id] = torrent;
+        torrent.on('error', function (err) {
+          onError(String(err && err.message ? err.message : err));
+        });
+      });
+    }).catch(function (err) {
+      onError(String(err && err.message ? err.message : err));
+    });
+  }
+
   function getStatus(id) {
     var t = torrents[id];
     if (!t) return null;
     return JSON.stringify({
+      ready: !!t.ready,
+      paused: !!t.paused,
       progress: t.progress || 0,
       downloadSpeed: t.downloadSpeed || 0,
       uploadSpeed: t.uploadSpeed || 0,
       numPeers: t.numPeers || 0,
       downloaded: t.downloaded || 0,
+      uploaded: t.uploaded || 0,
       length: t.length || 0,
-      done: t.done || false,
+      done: !!t.done,
+      files: t.ready ? t.files.map(function (f) { return f.downloaded || 0; }) : [],
     });
   }
 
-  // ── pause / resume / remove ─────────────────────────────────────────────────
+  // Returns the service-worker URL used to stream file `index`.
+  function streamUrl(id, index) {
+    var t = torrents[id];
+    if (!t || !t.ready) return null;
+    var file = t.files[index];
+    if (!file) return null;
+    // Prioritise the file being played.
+    t.files.forEach(function (f, i) {
+      if (i !== index && typeof f.deselect === 'function') f.deselect(1);
+    });
+    file.select(1);
+    try {
+      return file.streamURL;
+    } catch (e) {
+      console.warn('[Bitdrix] streamURL unavailable:', e);
+      return null;
+    }
+  }
+
   function pause(id) {
     var t = torrents[id];
     if (t) t.pause();
@@ -117,17 +154,15 @@
 
   function remove(id) {
     var t = torrents[id];
-    if (t) {
-      client.remove(t.infoHash);
-      delete torrents[id];
-    }
+    delete torrents[id];
+    if (t && client) client.remove(t, { destroyStore: true });
   }
 
-  // ── export ──────────────────────────────────────────────────────────────────
   window.bitdrixBridge = {
     init: init,
-    addMagnet: addMagnet,
+    add: add,
     getStatus: getStatus,
+    streamUrl: streamUrl,
     pause: pause,
     resume: resume,
     remove: remove,

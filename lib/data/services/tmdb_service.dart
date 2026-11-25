@@ -3,23 +3,52 @@ import 'package:dio/dio.dart';
 import '../../core/constants/tmdb_constants.dart';
 import '../models/media_model.dart';
 
+/// Thrown when Discover is used before a TMDB credential is configured.
+class TmdbMissingKeyException implements Exception {
+  const TmdbMissingKeyException();
+
+  @override
+  String toString() => 'No TMDB API key configured.';
+}
+
 /// Service for fetching data from the TMDB REST API (v3).
 ///
-/// Authentication uses a Bearer token (Read Access Token), which is sent in
-/// the `Authorization` header on every request.
+/// [credential] may be a v3 API key (sent as the `api_key` query parameter) or
+/// a v4 Read Access Token (a JWT, sent as a Bearer `Authorization` header).
 class TmdbService {
-  TmdbService() {
+  TmdbService(String credential) {
+    final key = credential.trim();
+    final isToken = key.startsWith('eyJ');
     _dio = Dio(
       BaseOptions(
         baseUrl: TmdbConstants.baseUrl,
-        queryParameters: {'api_key': TmdbConstants.apiKey},
+        queryParameters: {if (key.isNotEmpty && !isToken) 'api_key': key},
+        headers: {if (isToken) 'Authorization': 'Bearer $key'},
         connectTimeout: const Duration(seconds: 10),
         receiveTimeout: const Duration(seconds: 15),
       ),
     );
+    if (key.isEmpty) {
+      _dio.interceptors.add(InterceptorsWrapper(
+        onRequest: (options, handler) => handler.reject(DioException(
+          requestOptions: options,
+          error: const TmdbMissingKeyException(),
+        )),
+      ));
+    }
   }
 
   late final Dio _dio;
+
+  /// True when TMDB rejected the credential or none is configured.
+  static bool isAuthError(Object error) {
+    if (error is TmdbMissingKeyException) return true;
+    if (error is DioException) {
+      return error.error is TmdbMissingKeyException ||
+          error.response?.statusCode == 401;
+    }
+    return false;
+  }
 
   // ── Public API ────────────────────────────────────────────────────────────
 

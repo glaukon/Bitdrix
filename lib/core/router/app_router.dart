@@ -6,6 +6,7 @@ import '../../presentation/screens/add_torrent/add_torrent_screen.dart';
 import '../../presentation/screens/discover/media_detail_screen.dart';
 import '../../presentation/screens/home/home_screen.dart';
 import '../../presentation/screens/player/player_screen.dart';
+import '../../presentation/screens/player/prepare_screen.dart';
 import '../../presentation/screens/torrent_detail/torrent_detail_screen.dart';
 
 /// Application router configuration using GoRouter.
@@ -87,12 +88,31 @@ final appRouter = GoRouter(
 
     // ── Player ───────────────────────────────────────────────────────────────
     GoRoute(
+      path: '/prepare',
+      name: 'prepare',
+      pageBuilder: (context, state) {
+        final extra = state.extra as Map<String, dynamic>? ?? {};
+        return CustomTransitionPage(
+          key: state.pageKey,
+          child: PrepareScreen(
+            torrentId: extra['torrentId'] as String? ?? '',
+            title: extra['title'] as String? ?? '',
+            backdropUrl: extra['backdropUrl'] as String?,
+            posterUrl: extra['posterUrl'] as String?,
+            preferredFileName: extra['fileName'] as String?,
+          ),
+          transitionsBuilder: _fadeTransition,
+          opaque: true,
+        );
+      },
+    ),
+    GoRoute(
       path: '/player',
       name: 'player',
       pageBuilder: (context, state) {
         final extra = state.extra as Map<String, dynamic>? ?? {};
         final filePath = extra['filePath'] as String? ?? '';
-        final title = extra['title'] as String? ?? 'Playing';
+        final title = extra['title'] as String? ?? 'Reproduciendo';
         final torrentId = extra['torrentId'] as String?;
         final selectedFileId = extra['selectedFileId'] as String?;
         return CustomTransitionPage(
@@ -114,7 +134,7 @@ final appRouter = GoRouter(
   errorBuilder: (context, state) => Scaffold(
     body: Center(
       child: Text(
-        'Page not found: ${state.uri}',
+        'Página no encontrada: ${state.uri}',
         style: const TextStyle(color: Colors.white),
       ),
     ),

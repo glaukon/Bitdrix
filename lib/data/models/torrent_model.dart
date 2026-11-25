@@ -22,6 +22,7 @@ class TorrentModel extends TorrentEntity {
     required super.seeds,
     super.errorMessage,
     super.streamUrl,
+    super.infoHash,
   });
 
   /// Deserialises a [TorrentModel] from a JSON map.
@@ -118,6 +119,8 @@ class TorrentModel extends TorrentEntity {
     int? seeds,
     String? errorMessage,
     String? streamUrl,
+    String? infoHash,
+    bool clearError = false,
   }) {
     return TorrentModel(
       id: id ?? this.id,
@@ -135,8 +138,9 @@ class TorrentModel extends TorrentEntity {
       addedAt: addedAt ?? this.addedAt,
       peers: peers ?? this.peers,
       seeds: seeds ?? this.seeds,
-      errorMessage: errorMessage ?? this.errorMessage,
+      errorMessage: clearError ? null : (errorMessage ?? this.errorMessage),
       streamUrl: streamUrl ?? this.streamUrl,
+      infoHash: infoHash ?? this.infoHash,
     );
   }
 }

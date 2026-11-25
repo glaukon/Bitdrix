@@ -81,6 +81,29 @@ install(FILES "${FLUTTER_ICU_DATA_FILE}" DESTINATION "${INSTALL_BUNDLE_DATA_DIR}
 install(FILES "${FLUTTER_LIBRARY}" DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
   COMPONENT Runtime)
 
+# Bundle the rqbit BitTorrent engine (Apache-2.0, https://github.com/ikatson/rqbit)
+# next to the executable. It is downloaded once at configure time and verified
+# against a pinned SHA-256.
+set(RQBIT_VERSION "9.1.0")
+set(RQBIT_SHA256 "9fb0c0dbe63ea7ca04611039e0244e570d115e79d3a0d4ac2bba22b9d80f3cbc")
+set(RQBIT_EXE "${CMAKE_BINARY_DIR}/rqbit-${RQBIT_VERSION}/rqbit.exe")
+if(NOT EXISTS "${RQBIT_EXE}")
+  message(STATUS "Downloading rqbit ${RQBIT_VERSION}")
+  file(DOWNLOAD
+    "https://github.com/ikatson/rqbit/releases/download/v${RQBIT_VERSION}/rqbit.exe"
+    "${RQBIT_EXE}"
+    EXPECTED_HASH SHA256=${RQBIT_SHA256}
+    SHOW_PROGRESS
+    STATUS RQBIT_DOWNLOAD_STATUS)
+  list(GET RQBIT_DOWNLOAD_STATUS 0 RQBIT_DOWNLOAD_CODE)
+  if(NOT RQBIT_DOWNLOAD_CODE EQUAL 0)
+    file(REMOVE "${RQBIT_EXE}")
+    message(FATAL_ERROR "Could not download rqbit: ${RQBIT_DOWNLOAD_STATUS}")
+  endif()
+endif()
+install(PROGRAMS "${RQBIT_EXE}" DESTINATION "${CMAKE_INSTALL_PREFIX}"
+  COMPONENT Runtime)
+
 if(PLUGIN_BUNDLED_LIBRARIES)
   install(FILES "${PLUGIN_BUNDLED_LIBRARIES}"
     DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"

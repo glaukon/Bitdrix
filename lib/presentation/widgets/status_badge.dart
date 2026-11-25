@@ -90,15 +90,15 @@ class StatusBadge extends StatelessWidget {
   String _labelForStatus(TorrentStatus status) {
     switch (status) {
       case TorrentStatus.downloading:
-        return 'Downloading';
+        return 'Descargando';
       case TorrentStatus.completed:
-        return 'Completed';
+        return 'Completado';
       case TorrentStatus.paused:
-        return 'Paused';
+        return 'En pausa';
       case TorrentStatus.error:
         return 'Error';
       case TorrentStatus.queued:
-        return 'Queued';
+        return 'En cola';
     }
   }
 }

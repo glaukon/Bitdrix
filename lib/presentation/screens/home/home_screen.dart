@@ -26,17 +26,17 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       activeIcon: Icons.download_rounded,
     ),
     _TabInfo(
-      label: 'Discover',
+      label: 'Descubrir',
       icon: Icons.explore_outlined,
       activeIcon: Icons.explore_rounded,
     ),
     _TabInfo(
-      label: 'Files',
+      label: 'Archivos',
       icon: Icons.folder_outlined,
       activeIcon: Icons.folder_rounded,
     ),
     _TabInfo(
-      label: 'Settings',
+      label: 'Ajustes',
       icon: Icons.settings_outlined,
       activeIcon: Icons.settings_rounded,
     ),

@@ -26,6 +26,8 @@ class StreamSourceModel {
   // ── Derived getters ────────────────────────────────────────────────────────
 
   static const List<String> castilianAudioTags = [
+    // Torrentio marks Spain-Spanish audio with this flag in the title.
+    '🇪🇸',
     'castellano',
     'cast',
     'es-es',
@@ -34,6 +36,8 @@ class StreamSourceModel {
   ];
 
   static const List<String> latinSpanishAudioTags = [
+    // Torrentio's flag for Latin-American Spanish audio.
+    '🇲🇽',
     'latino',
     'latin',
     'latam',

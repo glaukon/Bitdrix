@@ -1,10 +1,12 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../../core/theme/app_theme.dart';
 import '../../../core/utils/file_size_formatter.dart';
@@ -48,22 +50,53 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   double _playbackSpeed = 1.0;
   Timer? _hideControlsTimer;
   String? _error;
+  String? _openedSource;
+  bool _userPickedSubtitle = false;
 
-  static const double _bufferThreshold = 0.02;
-  static const int _minBufferBytes = 1 * 1024 * 1024;
+  // Resume position support.
+  SharedPreferences? _prefs;
+  bool _resumeChecked = false;
+  // Computed while the widget is alive: `ref` must not be used in dispose().
+  String? _positionKeyCache;
+  DateTime _lastPositionSave = DateTime.fromMillisecondsSinceEpoch(0);
 
   bool get _isStreamingMode => widget.torrentId != null;
 
   @override
   void initState() {
     super.initState();
-    _player = Player();
+    _player = Player(
+      configuration: const PlayerConfiguration(
+        // Larger demuxer cache: torrent throughput is bursty.
+        bufferSize: 64 * 1024 * 1024,
+      ),
+    );
     _videoController = VideoController(_player);
+    _configureNetworkPlayback();
     _listenToPlayer();
+    unawaited(SharedPreferences.getInstance().then((p) => _prefs = p));
 
     if (!_isStreamingMode) {
       unawaited(_initPlayer(widget.filePath));
     }
+  }
+
+  /// The local stream servers block until the needed pieces arrive, which can
+  /// take a while on slow swarms; mpv must not give up on them too early.
+  void _configureNetworkPlayback() {
+    if (kIsWeb) return;
+    // NativePlayer.setProperty is missing from media_kit's web stub, so it is
+    // called dynamically to keep the web build compiling.
+    if (_player.platform is! NativePlayer) return;
+    final dynamic mpv = _player.platform;
+    unawaited(() async {
+      try {
+        await mpv.setProperty('network-timeout', '300');
+        await mpv.setProperty('cache', 'yes');
+        await mpv.setProperty('cache-secs', '30');
+        await mpv.setProperty('demuxer-readahead-secs', '30');
+      } catch (_) {}
+    }());
   }
 
   void _listenToPlayer() {
@@ -73,61 +106,146 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
 
     _subscriptions.addAll([
       _player.stream.playing.listen(repaint),
-      _player.stream.position.listen(repaint),
-      _player.stream.duration.listen(repaint),
+      _player.stream.position.listen((position) {
+        _maybeSavePosition(position);
+        repaint(null);
+      }),
+      _player.stream.duration.listen((duration) {
+        unawaited(_maybeResume(duration));
+        repaint(null);
+      }),
       _player.stream.buffering.listen(repaint),
       _player.stream.tracks.listen((_) {
-        _applyPreferredAudioTrack();
-        _disableSubtitlesByDefault();
+        unawaited(_applyTrackPreferences());
         repaint(null);
       }),
       _player.stream.track.listen(repaint),
       _player.stream.width.listen(repaint),
       _player.stream.height.listen(repaint),
+      _player.stream.error.listen((message) {
+        debugPrint('Player error: $message');
+        // Only fatal before playback starts; mpv recovers from later hiccups.
+        if (!_initialized && mounted) {
+          setState(() => _error = 'No se puede reproducir este archivo.\n$message');
+        }
+      }),
     ]);
   }
 
   Future<void> _initPlayer(String source) async {
-    if (_initializingPlayer || _initialized) return;
+    if (_initializingPlayer) return;
+    final uri = _toMediaUri(source);
+    if (uri == null) {
+      setState(() => _error = 'No se puede reproducir este archivo: ubicación desconocida.');
+      return;
+    }
     _initializingPlayer = true;
+    _openedSource = source;
     try {
-      final uri = _toMediaUri(source);
       await _player.open(Media(uri), play: true);
       await _player.setRate(_playbackSpeed);
-      await _disableSubtitlesByDefault();
+      // Start without subtitles; preferences are applied once tracks load.
+      if (!_userPickedSubtitle) await _player.setSubtitleTrack(SubtitleTrack.no());
 
       if (mounted) setState(() => _initialized = true);
       _scheduleHideControls();
-      unawaited(_applyPreferredAudioTrack());
+      unawaited(_applyTrackPreferences());
     } catch (e) {
-      if (mounted) setState(() => _error = 'Could not play this file.\n$e');
+      if (mounted) setState(() => _error = 'No se puede reproducir este archivo.\n$e');
     } finally {
       _initializingPlayer = false;
     }
   }
 
-  String _toMediaUri(String source) {
+  Future<void> _retry() async {
+    setState(() {
+      _error = null;
+      _initialized = false;
+      _openedSource = null;
+    });
+    if (!_isStreamingMode) await _initPlayer(widget.filePath);
+  }
+
+  String? _toMediaUri(String source) {
     final uri = Uri.tryParse(source);
     if (uri != null &&
-        (uri.scheme == 'http' ||
-            uri.scheme == 'https' ||
-            uri.scheme == 'content' ||
-            uri.scheme == 'file')) {
+        const ['http', 'https', 'content', 'file', 'blob'].contains(uri.scheme)) {
       return source;
     }
-    if (source.startsWith('/')) {
-      return Uri.file(source).toString();
+    // Absolute local paths (POSIX or Windows drive letters).
+    if (source.startsWith('/')) return Uri.file(source).toString();
+    if (RegExp(r'^[a-zA-Z]:[\\/]').hasMatch(source)) {
+      return Uri.file(source, windows: true).toString();
     }
-    return 'https://commondatastorage.googleapis.com/gtv-videos-bucket/'
-        'sample/BigBuckBunny.mp4';
+    return null;
+  }
+
+  // ── Resume position ───────────────────────────────────────────────────────
+
+  String _computePositionKey() {
+    if (_isStreamingMode) {
+      final torrent = ref.read(torrentByIdProvider(widget.torrentId!));
+      final fileIndex = widget.selectedFileId?.split('-').last ?? '0';
+      return 'playback_position:${torrent?.infoHash ?? widget.torrentId}:$fileIndex';
+    }
+    return 'playback_position:${widget.filePath}';
+  }
+
+  Future<void> _maybeResume(Duration duration) async {
+    if (_resumeChecked || duration <= Duration.zero) return;
+    _resumeChecked = true;
+    final key = _positionKeyCache = _computePositionKey();
+    final prefs = _prefs ?? await SharedPreferences.getInstance();
+    _prefs = prefs;
+    final saved = Duration(milliseconds: prefs.getInt(key) ?? 0);
+    if (saved > const Duration(seconds: 15) &&
+        saved < duration - const Duration(seconds: 30)) {
+      await _player.seek(saved);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Continuando en ${_formatDuration(saved)}'),
+            duration: const Duration(seconds: 4),
+            action: SnackBarAction(
+              label: 'Desde el principio',
+              onPressed: () => _player.seek(Duration.zero),
+            ),
+          ),
+        );
+      }
+    }
+  }
+
+  void _maybeSavePosition(Duration position, {bool force = false}) {
+    final prefs = _prefs;
+    final key = _positionKeyCache;
+    if (prefs == null || key == null) return;
+    final now = DateTime.now();
+    if (!force &&
+        now.difference(_lastPositionSave) < const Duration(seconds: 5)) {
+      return;
+    }
+    _lastPositionSave = now;
+    final duration = _player.state.duration;
+    final nearEnd = duration > Duration.zero &&
+        position > duration - const Duration(seconds: 60);
+    if (nearEnd) {
+      unawaited(prefs.remove(key));
+    } else {
+      unawaited(prefs.setInt(key, position.inMilliseconds));
+    }
   }
 
   @override
   void dispose() {
-    _hideControlsTimer?.cancel();
+    // Stop listening first so no player event can reach a disposed widget.
     for (final subscription in _subscriptions) {
       subscription.cancel();
     }
+    _hideControlsTimer?.cancel();
+    try {
+      _maybeSavePosition(_player.state.position, force: true);
+    } catch (_) {}
     _player.dispose();
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
@@ -181,156 +299,119 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
         ? ref.watch(torrentByIdProvider(widget.torrentId!))
         : null;
     final selectedFile = _findSelectedFile(torrent);
-
-    final downloadProgress = selectedFile?.progress ?? torrent?.progress ?? 0.0;
-    final downloadedBytes = selectedFile?.bufferedSize ??
-        selectedFile?.downloadedSize ??
-        torrent?.downloadedSize ??
-        0;
-    final playableBytes = selectedFile?.contiguousDownloadedSize ??
-        selectedFile?.downloadedSize ??
-        torrent?.downloadedSize ??
-        0;
-    final requiredBufferBytes =
-        selectedFile == null ? 0 : _requiredBufferBytes(selectedFile.size);
     final streamUrl = (torrent?.streamUrl?.isNotEmpty ?? false)
         ? torrent!.streamUrl
         : widget.filePath.isNotEmpty
             ? widget.filePath
             : null;
 
+    // Open the stream as soon as the engine has a URL: the local stream server
+    // waits for the pieces itself, so there is no need to pre-buffer here.
     if (_isStreamingMode &&
-        !_initialized &&
-        !_initializingPlayer &&
-        _error == null &&
         streamUrl != null &&
-        _hasEnoughBuffer(selectedFile, downloadProgress, playableBytes)) {
+        streamUrl != _openedSource &&
+        !_initializingPlayer &&
+        _error == null) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) unawaited(_initPlayer(streamUrl));
+        if (mounted && streamUrl != _openedSource && !_initializingPlayer) {
+          _initialized = false;
+          unawaited(_initPlayer(streamUrl));
+        }
       });
     }
 
-    final isBuffering = _error == null &&
-        _isStreamingMode &&
-        (streamUrl == null ||
-            !_hasEnoughBuffer(selectedFile, downloadProgress, playableBytes));
+    final waiting = _error == null &&
+        (!_initialized || (_isStreamingMode && _player.state.buffering));
 
     return Scaffold(
       backgroundColor: Colors.black,
       body: GestureDetector(
-        onTap: isBuffering ? null : _toggleControls,
+        onTap: _toggleControls,
         behavior: HitTestBehavior.opaque,
         child: Stack(
           fit: StackFit.expand,
           children: [
-            if (!isBuffering) _buildVideo(),
-            if (isBuffering)
+            _buildVideo(),
+            if (waiting)
               _buildBufferingOverlay(
-                downloadProgress,
-                downloadedBytes,
-                requiredBufferBytes,
+                torrent: torrent,
+                file: selectedFile,
+                hasStream: streamUrl != null,
               ),
-            if (!isBuffering && _controlsVisible) _buildControlsOverlay(),
+            if (_controlsVisible || _error != null) _buildControlsOverlay(),
           ],
         ),
       ),
     );
   }
 
-  Widget _buildBufferingOverlay(
-    double progress,
-    int downloadedBytes,
-    int requiredBufferBytes,
-  ) {
-    final torrent = _isStreamingMode
-        ? ref.read(torrentByIdProvider(widget.torrentId!))
-        : null;
-    final hasStreamUrl = torrent?.streamUrl != null;
-    final bufferFraction = requiredBufferBytes > 0
-        ? (downloadedBytes / requiredBufferBytes).clamp(0.0, 1.0)
-        : (progress / _bufferThreshold).clamp(0.0, 1.0);
-    final bufferPct = (bufferFraction * 100).toStringAsFixed(0);
-    final downloadPct = (progress * 100).toStringAsFixed(1);
+  Widget _buildBufferingOverlay({
+    required TorrentEntity? torrent,
+    required TorrentFileEntity? file,
+    required bool hasStream,
+  }) {
+    final speed = torrent?.downloadSpeed ?? 0;
+    final peers = torrent?.peers ?? 0;
+    final headline = !hasStream
+        ? 'Preparando la reproducción...'
+        : _isStreamingMode && peers == 0
+            ? 'Conectando con pares...'
+            : _initialized
+                ? 'Cargando...'
+                : 'Cargando vídeo...';
 
-    return Container(
-      color: Colors.black,
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          SizedBox(
-            width: 72,
-            height: 72,
-            child: Stack(
-              alignment: Alignment.center,
-              children: [
-                CircularProgressIndicator(
-                  value: bufferFraction,
-                  strokeWidth: 4,
-                  backgroundColor: Colors.white12,
-                  color: AppTheme.primary,
-                ),
-                const Icon(
-                  Icons.play_arrow_rounded,
-                  color: Colors.white54,
-                  size: 32,
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 24),
-          Text(
-            hasStreamUrl ? 'Buffering $bufferPct%' : 'Connecting to peers...',
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 16,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            widget.title,
-            style: const TextStyle(color: Colors.white54, fontSize: 13),
-            textAlign: TextAlign.center,
-          ),
-          const SizedBox(height: 32),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 48),
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(4),
-              child: LinearProgressIndicator(
-                value: bufferFraction,
+    final details = <String>[
+      if (_isStreamingMode) '$peers pares',
+      if (_isStreamingMode) '${FileSizeFormatter.format(speed.round())}/s',
+    ].join('  ·  ');
+
+    return IgnorePointer(
+      child: Container(
+        color: _initialized ? Colors.black38 : Colors.black,
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const SizedBox(
+              width: 56,
+              height: 56,
+              child: CircularProgressIndicator(
+                strokeWidth: 4,
                 backgroundColor: Colors.white12,
                 color: AppTheme.primary,
-                minHeight: 4,
               ),
             ),
-          ),
-          const SizedBox(height: 12),
-          Text(
-            _bufferingDetailText(
-              hasStreamUrl: hasStreamUrl,
-              downloadPct: downloadPct,
-              downloadedBytes: downloadedBytes,
-              requiredBufferBytes: requiredBufferBytes,
+            const SizedBox(height: 24),
+            Text(
+              headline,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 16,
+                fontWeight: FontWeight.w600,
+              ),
             ),
-            style: const TextStyle(color: Colors.white38, fontSize: 12),
-            textAlign: TextAlign.center,
-          ),
-        ],
+            const SizedBox(height: 8),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 32),
+              child: Text(
+                widget.title,
+                style: const TextStyle(color: Colors.white54, fontSize: 13),
+                textAlign: TextAlign.center,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            if (details.isNotEmpty) ...[
+              const SizedBox(height: 16),
+              Text(
+                details,
+                style: const TextStyle(color: Colors.white38, fontSize: 12),
+                textAlign: TextAlign.center,
+              ),
+            ],
+          ],
+        ),
       ),
     );
-  }
-
-  String _bufferingDetailText({
-    required bool hasStreamUrl,
-    required String downloadPct,
-    required int downloadedBytes,
-    required int requiredBufferBytes,
-  }) {
-    if (!hasStreamUrl) return 'Searching for peers...';
-    if (requiredBufferBytes <= 0) return 'Downloaded $downloadPct%';
-    return 'Buffer ${FileSizeFormatter.format(downloadedBytes)} / '
-        '${FileSizeFormatter.format(requiredBufferBytes)}';
   }
 
   Widget _buildVideo() {
@@ -352,39 +433,25 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                 style: const TextStyle(color: Colors.white, fontSize: 14),
                 textAlign: TextAlign.center,
               ),
+              const SizedBox(height: 16),
+              OutlinedButton.icon(
+                onPressed: _retry,
+                icon: const Icon(Icons.refresh_rounded),
+                label: const Text('Reintentar'),
+              ),
             ],
           ),
         ),
       );
     }
 
-    if (!_initialized) {
-      return const Center(
-        child: CircularProgressIndicator(
-          valueColor: AlwaysStoppedAnimation<Color>(AppTheme.primary),
-        ),
-      );
-    }
+    if (!_initialized) return const SizedBox.shrink();
 
     return Center(
-      child: Stack(
-        alignment: Alignment.center,
-        children: [
-          Video(
-            controller: _videoController,
-            controls: null,
-            fit: BoxFit.contain,
-          ),
-          if (_player.state.buffering)
-            const SizedBox(
-              width: 44,
-              height: 44,
-              child: CircularProgressIndicator(
-                strokeWidth: 3,
-                valueColor: AlwaysStoppedAnimation<Color>(AppTheme.primary),
-              ),
-            ),
-        ],
+      child: Video(
+        controller: _videoController,
+        controls: null,
+        fit: BoxFit.contain,
       ),
     );
   }
@@ -493,11 +560,24 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
         .toList();
   }
 
-  Future<void> _applyPreferredAudioTrack() async {
-    final preferred = ref.read(audioLanguagePreferenceProvider);
-    if (preferred.isAny) return;
+  /// Picks the preferred audio track, then the subtitles that go with it.
+  Future<void> _applyTrackPreferences() async {
+    if (!mounted) return;
+    final spanishAudio = await _applyPreferredAudioTrack();
+    await _applyPreferredSubtitles(spanishAudio);
+  }
 
+  /// Selects the best Spanish (preferably Castilian) audio track.
+  /// Returns whether the audio now playing is Spanish.
+  Future<bool> _applyPreferredAudioTrack() async {
+    final preferred = ref.read(audioLanguagePreferenceProvider);
     final tracks = _player.state.tracks.audio;
+    if (preferred.isAny) {
+      return _spanishScore(_player.state.track.audio.title,
+              _player.state.track.audio.language) >
+          0;
+    }
+
     final ranked = tracks
         .where((track) => track.id != 'auto' && track.id != 'no')
         .map(
@@ -506,14 +586,45 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
         .toList()
       ..sort((a, b) => b.score.compareTo(a.score));
 
-    if (ranked.isNotEmpty) {
+    if (ranked.isEmpty) return false;
+    if (_player.state.track.audio != ranked.first.track) {
       await _player.setAudioTrack(ranked.first.track);
+    }
+    return true;
+  }
+
+  /// Applies the subtitle setting unless the user already picked a track:
+  /// - automatic: forced Spanish subtitles with Spanish audio, full Spanish
+  ///   subtitles when there is no Spanish audio;
+  /// - always: full Spanish subtitles; off: none.
+  Future<void> _applyPreferredSubtitles(bool spanishAudio) async {
+    if (_userPickedSubtitle) return;
+    final mode = ref.read(subtitleModeProvider);
+
+    final spanish = _player.state.tracks.subtitle
+        .where((t) => t.id != 'auto' && t.id != 'no')
+        .where((t) => _spanishScore(t.title, t.language) > 0)
+        .toList()
+      ..sort((a, b) => _spanishScore(b.title, b.language)
+          .compareTo(_spanishScore(a.title, a.language)));
+    final forced = spanish.where(_isForcedSubtitle).toList();
+    final full = spanish.where((t) => !_isForcedSubtitle(t)).toList();
+
+    final SubtitleTrack target = switch (mode) {
+      SubtitleMode.off => SubtitleTrack.no(),
+      SubtitleMode.always => full.firstOrNull ?? SubtitleTrack.no(),
+      SubtitleMode.auto => spanishAudio
+          ? (forced.firstOrNull ?? SubtitleTrack.no())
+          : (full.firstOrNull ?? forced.firstOrNull ?? SubtitleTrack.no()),
+    };
+    if (_player.state.track.subtitle != target) {
+      await _player.setSubtitleTrack(target);
     }
   }
 
-  Future<void> _disableSubtitlesByDefault() async {
-    if (_player.state.track.subtitle.id == 'no') return;
-    await _player.setSubtitleTrack(SubtitleTrack.no());
+  bool _isForcedSubtitle(SubtitleTrack track) {
+    final text = _trackText(track.title, track.language, track.codec);
+    return text.contains('forz') || text.contains('forced');
   }
 
   Future<void> _selectAudioTrack(AudioTrack track) async {
@@ -529,6 +640,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   }
 
   Future<void> _selectSubtitleTrack(SubtitleTrack track) async {
+    _userPickedSubtitle = true;
     await _player.setSubtitleTrack(track);
     if (mounted) setState(() {});
     _scheduleHideControls();
@@ -546,8 +658,8 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
   }
 
   String _audioTrackLabel(AudioTrack track) {
-    if (track.id == 'auto') return 'Auto';
-    if (track.id == 'no') return 'Off';
+    if (track.id == 'auto') return 'Automático';
+    if (track.id == 'no') return 'Desactivado';
     return _trackLabel(
       title: track.title,
       language: track.language,
@@ -556,28 +668,33 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     );
   }
 
-  int _audioTrackPreferenceScore(AudioTrack track) {
-    final text = _trackText(track.title, track.language, track.codec);
+  int _audioTrackPreferenceScore(AudioTrack track) =>
+      _spanishScore(track.title, track.language, codec: track.codec);
+
+  /// > 0 when a track looks Spanish; Castilian scores highest, Latino lowest.
+  int _spanishScore(String? title, String? language, {String? codec}) {
+    final text = _trackText(title, language, codec);
     var score = 0;
 
-    if (_containsTag(text, ['castellano', 'cast', 'es-es'])) score += 1000;
-    if (_languageCode(track.language) == 'es') score += 550;
-    if (_containsTag(text, ['spanish', 'esp', 'spa'])) score += 400;
-    if (_containsTag(text, ['latino', 'latin', 'latam', 'es-la', 'es-mx'])) {
+    if (_containsTag(text, ['castellano', 'cast', 'es-es', 'españa'])) score += 1000;
+    if (_languageCode(language) == 'es') score += 550;
+    if (_containsTag(text, ['spanish', 'esp', 'spa', 'español'])) score += 400;
+    if (_containsTag(text, ['latino', 'latin', 'latam', 'es-la', 'es-mx', 'es-419'])) {
       score -= 350;
     }
 
     return score;
   }
 
+
   String _subtitleTrackLabel(SubtitleTrack track) {
-    if (track.id == 'auto') return 'Auto';
-    if (track.id == 'no') return 'Off';
+    if (track.id == 'auto') return 'Automático';
+    if (track.id == 'no') return 'Desactivado';
     return _trackLabel(
       title: track.title,
       language: track.language,
       codec: track.codec,
-      fallback: 'Subtitle ${track.id}',
+      fallback: 'Subtítulo ${track.id}',
     );
   }
 
@@ -717,7 +834,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                   width: 40,
                   height: 40,
                   child: PopupMenuButton<AudioTrack>(
-                    tooltip: 'Audio track',
+                    tooltip: 'Pista de audio',
                     icon: const Icon(
                       Icons.audiotrack_rounded,
                       color: Colors.white,
@@ -733,7 +850,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                   width: 40,
                   height: 40,
                   child: PopupMenuButton<SubtitleTrack>(
-                    tooltip: 'Subtitles',
+                    tooltip: 'Subtítulos',
                     icon: const Icon(
                       Icons.subtitles_rounded,
                       color: Colors.white,
@@ -750,7 +867,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
                   width: 40,
                   height: 40,
                   child: PopupMenuButton<double>(
-                    tooltip: 'Playback speed',
+                    tooltip: 'Velocidad de reproducción',
                     icon: const Icon(Icons.speed_rounded, color: Colors.white),
                     iconSize: 26,
                     padding: EdgeInsets.zero,
@@ -795,21 +912,6 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     } catch (_) {
       return null;
     }
-  }
-
-  bool _hasEnoughBuffer(
-    TorrentFileEntity? selectedFile,
-    double progress,
-    int downloadedBytes,
-  ) {
-    if (selectedFile == null) return progress >= _bufferThreshold;
-    return downloadedBytes >= _requiredBufferBytes(selectedFile.size);
-  }
-
-  int _requiredBufferBytes(int fileSize) {
-    if (fileSize <= _minBufferBytes) return fileSize;
-    final percentBytes = (fileSize * _bufferThreshold).round();
-    return percentBytes.clamp(_minBufferBytes, 8 * 1024 * 1024).toInt();
   }
 }
 

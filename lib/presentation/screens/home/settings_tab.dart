@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../widgets/tmdb_key_dialog.dart';
 import '../../../core/constants/app_constants.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../data/models/app_language.dart';
@@ -25,24 +26,55 @@ class SettingsTab extends ConsumerWidget {
         _buildStatsSection(torrents.length),
         const SizedBox(height: 20),
         _buildSection(
-          title: 'Preferences',
+          title: 'Preferencias',
           children: [
             _LanguageTile(
               current: currentLang,
               onTap: () => _showLanguagePicker(context, ref),
             ),
+            InkWell(
+              onTap: () => _showSubtitleModePicker(context, ref),
+              child: _SettingsTile(
+                icon: Icons.subtitles_rounded,
+                title: 'Subtítulos',
+                subtitle: switch (ref.watch(subtitleModeProvider)) {
+                  SubtitleMode.auto =>
+                    'Automáticos: forzados con audio en castellano, completos si no lo hay',
+                  SubtitleMode.off => 'Desactivados',
+                  SubtitleMode.always => 'Siempre en castellano',
+                },
+                trailing: const Icon(
+                  Icons.chevron_right_rounded,
+                  color: AppTheme.onSurfaceVariant,
+                ),
+              ),
+            ),
+            InkWell(
+              onTap: () => showTmdbKeyDialog(context, ref),
+              child: _SettingsTile(
+                icon: Icons.vpn_key_rounded,
+                title: 'Clave de API de TMDB',
+                subtitle: ref.watch(tmdbApiKeyProvider).isEmpty
+                    ? 'Sin configurar: necesaria para Descubrir'
+                    : 'Configurada',
+                trailing: const Icon(
+                  Icons.chevron_right_rounded,
+                  color: AppTheme.onSurfaceVariant,
+                ),
+              ),
+            ),
           ],
         ),
         const SizedBox(height: 20),
         _buildSection(
-          title: 'Network',
+          title: 'Red',
           children: const [
             _SettingsTile(
               icon: Icons.speed_rounded,
-              title: 'Download Speed Limit',
-              subtitle: 'Unlimited',
+              title: 'Límite de descarga',
+              subtitle: 'Sin límite',
               trailing: Text(
-                'Unlimited',
+                'Sin límite',
                 style: TextStyle(
                   color: AppTheme.onSurfaceVariant,
                   fontSize: 13,
@@ -51,10 +83,10 @@ class SettingsTab extends ConsumerWidget {
             ),
             _SettingsTile(
               icon: Icons.upload_rounded,
-              title: 'Upload Speed Limit',
-              subtitle: 'Unlimited',
+              title: 'Límite de subida',
+              subtitle: 'Sin límite',
               trailing: Text(
-                'Unlimited',
+                'Sin límite',
                 style: TextStyle(
                   color: AppTheme.onSurfaceVariant,
                   fontSize: 13,
@@ -63,8 +95,8 @@ class SettingsTab extends ConsumerWidget {
             ),
             _SettingsTile(
               icon: Icons.router_rounded,
-              title: 'DHT Network',
-              subtitle: 'Enabled',
+              title: 'Red DHT',
+              subtitle: 'Activada',
               trailing: Icon(
                 Icons.check_circle_rounded,
                 color: AppTheme.success,
@@ -75,27 +107,27 @@ class SettingsTab extends ConsumerWidget {
         ),
         const SizedBox(height: 20),
         _buildSection(
-          title: 'Storage',
+          title: 'Almacenamiento',
           children: const [
             _SettingsTile(
               icon: Icons.folder_rounded,
-              title: 'Download Location',
+              title: 'Ubicación de descargas',
               subtitle: '/storage/emulated/0/Download/Bitdrix',
             ),
             _SettingsTile(
               icon: Icons.delete_sweep_rounded,
-              title: 'Clear Completed',
-              subtitle: 'Remove completed torrents from the list',
+              title: 'Borrar completados',
+              subtitle: 'Quita de la lista los torrents completados',
             ),
           ],
         ),
         const SizedBox(height: 20),
         _buildSection(
-          title: 'About',
+          title: 'Acerca de',
           children: [
             const _SettingsTile(
               icon: Icons.info_outline_rounded,
-              title: 'Version',
+              title: 'Versión',
               subtitle: AppConstants.appVersion,
               trailing: Text(
                 AppConstants.appVersion,
@@ -107,7 +139,7 @@ class SettingsTab extends ConsumerWidget {
             ),
             const _SettingsTile(
               icon: Icons.code_rounded,
-              title: 'Built with Flutter',
+              title: 'Hecho con Flutter',
               subtitle: 'libtorrent4j · Clean Architecture · Riverpod',
             ),
           ],
@@ -131,6 +163,39 @@ class SettingsTab extends ConsumerWidget {
         },
       ),
     );
+  }
+
+  Future<void> _showSubtitleModePicker(
+      BuildContext context, WidgetRef ref) async {
+    final current = ref.read(subtitleModeProvider);
+    final picked = await showDialog<SubtitleMode>(
+      context: context,
+      builder: (ctx) => SimpleDialog(
+        title: const Text('Subtítulos'),
+        children: [
+          for (final mode in SubtitleMode.values)
+            SimpleDialogOption(
+              onPressed: () => Navigator.pop(ctx, mode),
+              child: Row(
+                children: [
+                  Icon(
+                    mode == current
+                        ? Icons.radio_button_checked_rounded
+                        : Icons.radio_button_unchecked_rounded,
+                    color: AppTheme.primary,
+                    size: 20,
+                  ),
+                  const SizedBox(width: 12),
+                  Text(mode.label),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+    if (picked != null) {
+      await ref.read(subtitleModeProvider.notifier).set(picked);
+    }
   }
 
   Widget _buildAppInfo() {
@@ -173,7 +238,7 @@ class SettingsTab extends ConsumerWidget {
           ),
           const SizedBox(height: 4),
           const Text(
-            'Modern Torrent Client',
+            'Cliente de torrents moderno',
             style: TextStyle(
               color: AppTheme.onSurfaceVariant,
               fontSize: 13,
@@ -197,9 +262,9 @@ class SettingsTab extends ConsumerWidget {
         children: [
           _StatItem(label: 'Torrents', value: torrentCount.toString()),
           _divider(),
-          const _StatItem(label: 'Status', value: 'Active'),
+          const _StatItem(label: 'Estado', value: 'Activos'),
           _divider(),
-          const _StatItem(label: 'Engine', value: 'libtorrent'),
+          const _StatItem(label: 'Motor', value: 'libtorrent'),
         ],
       ),
     );
@@ -278,7 +343,7 @@ class _LanguageTile extends StatelessWidget {
             color: AppTheme.primary, size: 18),
       ),
       title: const Text(
-        'Preferred Language',
+        'Idioma preferido',
         style: TextStyle(
           color: AppTheme.onBackground,
           fontSize: 14,
@@ -286,7 +351,7 @@ class _LanguageTile extends StatelessWidget {
         ),
       ),
       subtitle: const Text(
-        'Prioritize sources in this language',
+        'Prioriza las fuentes en este idioma',
         style: TextStyle(color: AppTheme.onSurfaceVariant, fontSize: 12),
       ),
       trailing: Row(
@@ -338,7 +403,7 @@ class _LanguagePickerSheet extends StatelessWidget {
         const Padding(
           padding: EdgeInsets.fromLTRB(20, 4, 20, 12),
           child: Text(
-            'Preferred Language',
+            'Idioma preferido',
             style: TextStyle(
               color: AppTheme.onBackground,
               fontSize: 16,

@@ -98,7 +98,7 @@ class _PosterImage extends StatelessWidget {
               top: 6,
               right: 6,
               child: _Badge(
-                text: media.mediaType == 'tv' ? 'TV' : 'Movie',
+                text: media.mediaType == 'tv' ? 'TV' : 'Película',
                 color: media.mediaType == 'tv'
                     ? AppTheme.accent.withAlpha(200)
                     : AppTheme.primary.withAlpha(200),

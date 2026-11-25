@@ -9,7 +9,9 @@ import 'settings_providers.dart';
 
 // ── Service providers ─────────────────────────────────────────────────────────
 
-final tmdbServiceProvider = Provider<TmdbService>((ref) => TmdbService());
+final tmdbServiceProvider = Provider<TmdbService>(
+  (ref) => TmdbService(ref.watch(tmdbApiKeyProvider)),
+);
 
 final torrentioServiceProvider =
     Provider<TorrentioService>((ref) => TorrentioService());
@@ -66,52 +68,28 @@ final mediaDetailProvider =
 
 // ── Stream sources ────────────────────────────────────────────────────────────
 
-/// Scores sources so likely Spanish / multi-audio files appear first while
-/// keeping seeders as the tie-breaker.
+const _qualityRank = {'4K': 4, '1080p': 3, '720p': 2, '480p': 1};
+
+/// Default order for movies and series: highest quality first (4K → 1080p →
+/// 720p → 480p → unknown) and, within the same quality, most seeders first.
+/// The preferred-language setting only breaks exact ties.
 List<StreamSourceModel> _rankSources(
   List<StreamSourceModel> sources,
   AppLanguage lang,
 ) {
+  bool matchesLanguage(StreamSourceModel s) =>
+      !lang.isAny && lang.keywords.any((kw) => s.searchableText.contains(kw));
+
   return [...sources]..sort((a, b) {
-      final scoreDiff = _sourceScore(b, lang).compareTo(_sourceScore(a, lang));
-      if (scoreDiff != 0) return scoreDiff;
+      final quality = (_qualityRank[b.quality] ?? 0)
+          .compareTo(_qualityRank[a.quality] ?? 0);
+      if (quality != 0) return quality;
 
-      final sa = a.seeders;
-      final sb = b.seeders;
-      if (sa == null && sb == null) return 0;
-      if (sa == null) return 1;
-      if (sb == null) return -1;
-      return sb.compareTo(sa);
+      final seeders = (b.seeders ?? -1).compareTo(a.seeders ?? -1);
+      if (seeders != 0) return seeders;
+
+      return (matchesLanguage(b) ? 1 : 0).compareTo(matchesLanguage(a) ? 1 : 0);
     });
-}
-
-int _sourceScore(StreamSourceModel source, AppLanguage lang) {
-  var score = 0;
-
-  if (source.hasCastilianAudioTag) score += 1400;
-  if (source.hasGenericSpanishAudioTag) score += 850;
-  if (source.hasLatinSpanishAudioTag) score += 300;
-  if (source.hasMultiAudioTag) score += 650;
-
-  if (!lang.isAny) {
-    final text = source.searchableText;
-    if (lang.keywords.any((kw) => text.contains(kw))) score += 500;
-  }
-
-  switch (source.quality) {
-    case '4K':
-      score += 80;
-      break;
-    case '1080p':
-      score += 60;
-      break;
-    case '720p':
-      score += 35;
-      break;
-  }
-
-  score += (source.seeders ?? 0).clamp(0, 500);
-  return score;
 }
 
 /// Fetches and sorts available torrent sources for the given [MediaModel].
@@ -119,8 +97,7 @@ int _sourceScore(StreamSourceModel source, AppLanguage lang) {
 /// Steps:
 /// 1. Resolves the IMDB ID from TMDB (needed by Torrentio).
 /// 2. Fetches the stream list from Torrentio.
-/// 3. Sorts by seeder count descending (null seeders go last).
-/// 4. Moves sources that match the user's preferred language to the top.
+/// 3. Sorts by quality, then seeders (see [_rankSources]).
 final streamSourcesProvider =
     FutureProvider.family<List<StreamSourceModel>, MediaModel>(
         (ref, media) async {

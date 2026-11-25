@@ -66,3 +66,9 @@ android/local.properties
 android/key.properties
 android/app/*.jks
 android/app/*.keystore
+# Local secrets (TMDB key) used with --dart-define-from-file
+config/secrets.json
+
+# Local IDE / build caches
+.vscode/settings.json
+**/.gradle/

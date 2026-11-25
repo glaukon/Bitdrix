@@ -20,9 +20,9 @@ class FilesScreen extends ConsumerWidget {
     if (completed.isEmpty) {
       return const EmptyState(
         icon: Icons.folder_open_rounded,
-        title: 'No Completed Downloads',
+        title: 'No hay descargas completadas',
         subtitle:
-            'Finished torrents will appear here. Start downloading to see your files.',
+            'Aquí aparecerán los torrents terminados. Empieza una descarga para ver tus archivos.',
       );
     }
 
@@ -101,7 +101,7 @@ class _TorrentFolderState extends State<_TorrentFolder> {
                   ),
                   const SizedBox(height: 3),
                   Text(
-                    '${widget.torrent.files.length} file(s) · '
+                    '${widget.torrent.files.length} archivo(s) · '
                     '${FileSizeFormatter.format(widget.torrent.totalSize)}',
                     style: const TextStyle(
                       color: AppTheme.onSurfaceVariant,

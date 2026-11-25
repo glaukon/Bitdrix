@@ -125,7 +125,7 @@ class _InfoColumn extends StatelessWidget {
               ),
               const SizedBox(width: 3),
               Text(
-                '$seeders seeders',
+                '$seeders semillas',
                 style: const TextStyle(
                   color: AppTheme.onSurfaceVariant,
                   fontSize: 11,
@@ -193,7 +193,7 @@ class _AddButton extends StatelessWidget {
       icon: const Icon(Icons.add_circle_outline_rounded),
       color: AppTheme.accent,
       iconSize: 28,
-      tooltip: 'Add to downloads',
+      tooltip: 'Añadir a descargas',
       style: IconButton.styleFrom(
         backgroundColor: AppTheme.accent.withAlpha(20),
         shape: RoundedRectangleBorder(

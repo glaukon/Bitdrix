@@ -25,10 +25,10 @@ class TorrentDetailScreen extends ConsumerWidget {
 
     if (torrent == null) {
       return Scaffold(
-        appBar: AppBar(title: const Text('Torrent Detail')),
+        appBar: AppBar(title: const Text('Detalle del torrent')),
         body: const Center(
           child: Text(
-            'Torrent not found.',
+            'No se ha encontrado el torrent.',
             style: TextStyle(color: AppTheme.onSurfaceVariant),
           ),
         ),
@@ -45,7 +45,7 @@ class TorrentDetailScreen extends ConsumerWidget {
         actions: [
           IconButton(
             icon: const Icon(Icons.delete_outline_rounded),
-            tooltip: 'Remove torrent',
+            tooltip: 'Eliminar torrent',
             onPressed: () => _confirmRemove(context, ref, torrent),
           ),
         ],
@@ -110,17 +110,17 @@ class TorrentDetailScreen extends ConsumerWidget {
                     StatusBadge(status: torrent.status),
                     const SizedBox(height: 10),
                     _InfoRow(
-                      label: 'Downloaded',
+                      label: 'Descargado',
                       value: FileSizeFormatter.format(torrent.downloadedSize),
                     ),
                     const SizedBox(height: 6),
                     _InfoRow(
-                      label: 'Total Size',
+                      label: 'Tamaño total',
                       value: FileSizeFormatter.format(torrent.totalSize),
                     ),
                     const SizedBox(height: 6),
                     _InfoRow(
-                      label: 'Uploaded',
+                      label: 'Subido',
                       value: FileSizeFormatter.format(torrent.uploadedSize),
                     ),
                   ],
@@ -158,25 +158,25 @@ class TorrentDetailScreen extends ConsumerWidget {
         _StatCard(
           icon: Icons.arrow_downward_rounded,
           color: AppTheme.accent,
-          label: 'Download',
+          label: 'Descarga',
           value: SpeedFormatter.format(torrent.downloadSpeed),
         ),
         _StatCard(
           icon: Icons.arrow_upward_rounded,
           color: AppTheme.success,
-          label: 'Upload',
+          label: 'Subida',
           value: SpeedFormatter.format(torrent.uploadSpeed),
         ),
         _StatCard(
           icon: Icons.people_outline_rounded,
           color: AppTheme.primary,
-          label: 'Peers',
+          label: 'Pares',
           value: torrent.peers.toString(),
         ),
         _StatCard(
           icon: Icons.cloud_done_outlined,
           color: AppTheme.primaryLight,
-          label: 'Seeds',
+          label: 'Semillas',
           value: torrent.seeds.toString(),
         ),
       ],
@@ -195,7 +195,7 @@ class TorrentDetailScreen extends ConsumerWidget {
           Expanded(
             child: _ControlButton(
               icon: Icons.pause_rounded,
-              label: 'Pause',
+              label: 'Pausar',
               color: AppTheme.warning,
               onPressed: () => notifier.pause(torrent.id),
             ),
@@ -204,7 +204,7 @@ class TorrentDetailScreen extends ConsumerWidget {
           Expanded(
             child: _ControlButton(
               icon: Icons.play_arrow_rounded,
-              label: 'Resume',
+              label: 'Reanudar',
               color: AppTheme.success,
               onPressed: () => notifier.resume(torrent.id),
             ),
@@ -213,7 +213,7 @@ class TorrentDetailScreen extends ConsumerWidget {
         Expanded(
           child: _ControlButton(
             icon: Icons.delete_outline_rounded,
-            label: 'Remove',
+            label: 'Eliminar',
             color: AppTheme.error,
             onPressed: () => _confirmRemove(context, ref, torrent),
           ),
@@ -237,8 +237,8 @@ class TorrentDetailScreen extends ConsumerWidget {
         ),
         child: Text(
           torrent.status == TorrentStatus.error
-              ? 'Could not load real files for this torrent.'
-              : 'Loading real files from torrent metadata…',
+              ? 'No se han podido cargar los archivos de este torrent.'
+              : 'Cargando los archivos del torrent…',
           style: const TextStyle(
             color: AppTheme.onSurfaceVariant,
             fontSize: 13,
@@ -251,7 +251,7 @@ class TorrentDetailScreen extends ConsumerWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const Text(
-          'Files',
+          'Archivos',
           style: TextStyle(
             color: AppTheme.onBackground,
             fontSize: 16,
@@ -292,7 +292,8 @@ class TorrentDetailScreen extends ConsumerWidget {
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Could not prepare this file for playback.'),
+          content:
+              Text('No se ha podido preparar este archivo para reproducirlo.'),
         ),
       );
     }
@@ -306,17 +307,17 @@ class TorrentDetailScreen extends ConsumerWidget {
     final result = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Remove Torrent'),
-        content: Text('Remove "${torrent.name}"?'),
+        title: const Text('Eliminar torrent'),
+        content: Text('¿Eliminar "${torrent.name}"?'),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancel'),
+            child: const Text('Cancelar'),
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
             style: TextButton.styleFrom(foregroundColor: AppTheme.error),
-            child: const Text('Remove'),
+            child: const Text('Eliminar'),
           ),
         ],
       ),
@@ -484,8 +485,8 @@ class _FileRow extends StatelessWidget {
                 GestureDetector(
                   onTap: onPlay,
                   child: Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 10, vertical: 5),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                     decoration: BoxDecoration(
                       color: AppTheme.primary.withAlpha(26),
                       borderRadius: BorderRadius.circular(6),
@@ -493,12 +494,12 @@ class _FileRow extends StatelessWidget {
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Icon(Icons.play_arrow_rounded,
+                        const Icon(Icons.play_arrow_rounded,
                             color: AppTheme.primary, size: 16),
-                        SizedBox(width: 3),
+                        const SizedBox(width: 3),
                         Text(
-                          file.isCompleted ? 'Play' : 'Stream',
-                          style: TextStyle(
+                          file.isCompleted ? 'Reproducir' : 'Ver',
+                          style: const TextStyle(
                             color: AppTheme.primary,
                             fontSize: 12,
                             fontWeight: FontWeight.w600,
@@ -519,9 +520,8 @@ class _FileRow extends StatelessWidget {
                   lineHeight: 4,
                   padding: EdgeInsets.zero,
                   backgroundColor: AppTheme.surfaceVariant,
-                  progressColor: file.isCompleted
-                      ? AppTheme.success
-                      : AppTheme.primary,
+                  progressColor:
+                      file.isCompleted ? AppTheme.success : AppTheme.primary,
                   barRadius: const Radius.circular(2),
                   animation: false,
                 ),

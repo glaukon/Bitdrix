@@ -1,4 +1,7 @@
+import 'dart:convert';
+
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -19,6 +22,7 @@ class _AddTorrentScreenState extends ConsumerState<AddTorrentScreen>
   late TabController _tabController;
   final _magnetController = TextEditingController();
   String? _selectedFilePath;
+  String? _selectedFileName;
   bool _isLoading = false;
   String? _errorMessage;
 
@@ -39,20 +43,20 @@ class _AddTorrentScreenState extends ConsumerState<AddTorrentScreen>
   Widget build(BuildContext context) {
     return LoadingOverlay(
       isLoading: _isLoading,
-      message: 'Adding torrent...',
+      message: 'Añadiendo torrent...',
       child: Scaffold(
         appBar: AppBar(
-          title: const Text('Add Torrent'),
+          title: const Text('Añadir torrent'),
           bottom: TabBar(
             controller: _tabController,
             tabs: const [
               Tab(
                 icon: Icon(Icons.link_rounded, size: 18),
-                text: 'Magnet Link',
+                text: 'Enlace magnet',
               ),
               Tab(
                 icon: Icon(Icons.file_open_rounded, size: 18),
-                text: 'Torrent File',
+                text: 'Archivo torrent',
               ),
             ],
           ),
@@ -76,7 +80,7 @@ class _AddTorrentScreenState extends ConsumerState<AddTorrentScreen>
         children: [
           const SizedBox(height: 12),
           const Text(
-            'Paste your magnet link below',
+            'Pega tu enlace magnet aquí',
             style: TextStyle(
               color: AppTheme.onSurfaceVariant,
               fontSize: 14,
@@ -119,72 +123,7 @@ class _AddTorrentScreenState extends ConsumerState<AddTorrentScreen>
           ElevatedButton.icon(
             onPressed: _addMagnet,
             icon: const Icon(Icons.add_rounded),
-            label: const Text('Add Magnet'),
-          ),
-          const SizedBox(height: 16),
-          _buildSampleMagnetHint(),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildSampleMagnetHint() {
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: AppTheme.surfaceVariant,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0xFF333348)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Row(
-            children: [
-              Icon(Icons.info_outline_rounded,
-                  color: AppTheme.accent, size: 16),
-              SizedBox(width: 6),
-              Text(
-                'Demo tip',
-                style: TextStyle(
-                  color: AppTheme.accent,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          const Text(
-            'In demo mode any magnet link is accepted. Paste any text '
-            'starting with "magnet:?" to simulate a download.',
-            style: TextStyle(
-              color: AppTheme.onSurfaceVariant,
-              fontSize: 12,
-              height: 1.5,
-            ),
-          ),
-          const SizedBox(height: 10),
-          GestureDetector(
-            onTap: () => _magnetController.text =
-                'magnet:?xt=urn:btih:DEMO0000000000000000000000000000000000000'
-                '&dn=Big+Buck+Bunny+1080p&tr=udp://tracker.example.com:1337',
-            child: Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-              decoration: BoxDecoration(
-                color: AppTheme.primary.withAlpha(26),
-                borderRadius: BorderRadius.circular(6),
-              ),
-              child: const Text(
-                'Tap to fill demo magnet',
-                style: TextStyle(
-                  color: AppTheme.primary,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ),
+            label: const Text('Añadir magnet'),
           ),
         ],
       ),
@@ -199,7 +138,7 @@ class _AddTorrentScreenState extends ConsumerState<AddTorrentScreen>
         children: [
           const SizedBox(height: 12),
           const Text(
-            'Select a .torrent file from your device',
+            'Elige un archivo .torrent de tu dispositivo',
             style: TextStyle(
               color: AppTheme.onSurfaceVariant,
               fontSize: 14,
@@ -235,8 +174,9 @@ class _AddTorrentScreenState extends ConsumerState<AddTorrentScreen>
                   const SizedBox(height: 12),
                   Text(
                     _selectedFilePath != null
-                        ? _selectedFilePath!.split('/').last.split('\\').last
-                        : 'Tap to browse .torrent files',
+                        ? (_selectedFileName ??
+                            _selectedFilePath!.split('/').last.split('\\').last)
+                        : 'Toca para buscar archivos .torrent',
                     style: TextStyle(
                       color: _selectedFilePath != null
                           ? AppTheme.onBackground
@@ -251,7 +191,7 @@ class _AddTorrentScreenState extends ConsumerState<AddTorrentScreen>
                   if (_selectedFilePath == null) ...[
                     const SizedBox(height: 6),
                     const Text(
-                      '.torrent files only',
+                      'Solo archivos .torrent',
                       style: TextStyle(
                         color: AppTheme.onSurfaceVariant,
                         fontSize: 12,
@@ -277,22 +217,23 @@ class _AddTorrentScreenState extends ConsumerState<AddTorrentScreen>
             ElevatedButton.icon(
               onPressed: _addFile,
               icon: const Icon(Icons.add_rounded),
-              label: const Text('Add Torrent File'),
+              label: const Text('Añadir archivo torrent'),
             ),
             const SizedBox(height: 12),
             TextButton.icon(
               onPressed: () => setState(() {
                 _selectedFilePath = null;
+                _selectedFileName = null;
                 _errorMessage = null;
               }),
               icon: const Icon(Icons.clear_rounded, size: 16),
-              label: const Text('Clear selection'),
+              label: const Text('Quitar selección'),
             ),
           ] else
             ElevatedButton.icon(
               onPressed: _pickFile,
               icon: const Icon(Icons.folder_open_rounded),
-              label: const Text('Browse Files'),
+              label: const Text('Buscar archivos'),
             ),
         ],
       ),
@@ -305,19 +246,33 @@ class _AddTorrentScreenState extends ConsumerState<AddTorrentScreen>
       final result = await FilePicker.platform.pickFiles(
         type: FileType.custom,
         allowedExtensions: ['torrent'],
+        // The browser exposes no file paths, only the bytes.
+        withData: kIsWeb,
       );
-      if (result != null && result.files.single.path != null) {
-        setState(() => _selectedFilePath = result.files.single.path);
+      final picked = result?.files.single;
+      if (picked == null) return;
+      if (kIsWeb && picked.bytes != null) {
+        setState(() {
+          _selectedFileName = picked.name;
+          _selectedFilePath = 'data:application/x-bittorrent;'
+              'name=${Uri.encodeComponent(picked.name)};'
+              'base64,${base64Encode(picked.bytes!)}';
+        });
+      } else if (picked.path != null) {
+        setState(() {
+          _selectedFileName = picked.name;
+          _selectedFilePath = picked.path;
+        });
       }
     } catch (e) {
-      setState(() => _errorMessage = 'Could not open file picker: $e');
+      setState(() => _errorMessage = 'No se ha podido abrir el selector de archivos: $e');
     }
   }
 
   Future<void> _addMagnet() async {
     final link = _magnetController.text.trim();
     if (link.isEmpty) {
-      setState(() => _errorMessage = 'Please enter a magnet link.');
+      setState(() => _errorMessage = 'Introduce un enlace magnet.');
       return;
     }
     setState(() {
@@ -327,7 +282,7 @@ class _AddTorrentScreenState extends ConsumerState<AddTorrentScreen>
     try {
       await ref.read(torrentsProvider.notifier).addMagnet(link);
       if (mounted) {
-        _showSuccess('Torrent added successfully!');
+        _showSuccess('¡Torrent añadido!');
         context.pop();
       }
     } catch (e) {
@@ -348,7 +303,7 @@ class _AddTorrentScreenState extends ConsumerState<AddTorrentScreen>
           .read(torrentsProvider.notifier)
           .addTorrentFile(_selectedFilePath!);
       if (mounted) {
-        _showSuccess('Torrent file added!');
+        _showSuccess('¡Archivo torrent añadido!');
         context.pop();
       }
     } catch (e) {

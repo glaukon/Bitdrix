@@ -23,7 +23,7 @@ class AppLanguage {
 const kAppLanguages = [
   AppLanguage(
     code: 'any',
-    name: 'Any language',
+    name: 'Cualquier idioma',
     keywords: [],
   ),
   AppLanguage(

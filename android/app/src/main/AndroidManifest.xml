@@ -21,6 +21,11 @@
     <!-- Keep CPU alive while downloading in background -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
+    <!-- Foreground service that keeps downloads running in the background -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
     <application
         android:label="Bitdrix"
         android:name="${applicationName}"
@@ -63,6 +68,11 @@
                 <data android:scheme="magnet" />
             </intent-filter>
         </activity>
+
+        <service
+            android:name=".TorrentForegroundService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
 
         <!-- Flutter engine and plugins metadata -->
         <meta-data

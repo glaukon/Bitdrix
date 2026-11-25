@@ -9,7 +9,7 @@ class EtaCalculator {
     required int remainingBytes,
     required double speedBytesPerSecond,
   }) {
-    if (remainingBytes <= 0) return 'Done';
+    if (remainingBytes <= 0) return 'Terminado';
     if (speedBytesPerSecond <= 0) return '--';
 
     final seconds = (remainingBytes / speedBytesPerSecond).round();

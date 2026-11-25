@@ -3,10 +3,16 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../data/services/tmdb_service.dart';
+import '../../providers/settings_providers.dart';
+import '../../widgets/tmdb_key_dialog.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../data/models/media_model.dart';
 import '../../providers/discover_providers.dart';
 import 'widgets/media_card.dart';
+
+/// Maximum width of a poster card in the Discover grids.
+const double _kCardMaxWidth = 180;
 
 /// The Discover tab — browse trending content or search TMDB.
 ///
@@ -87,7 +93,7 @@ class _SearchBar extends StatelessWidget {
         onChanged: onChanged,
         style: const TextStyle(color: AppTheme.onBackground),
         decoration: InputDecoration(
-          hintText: 'Search movies & TV shows…',
+          hintText: 'Buscar películas y series…',
           prefixIcon: const Icon(Icons.search_rounded,
               color: AppTheme.onSurfaceVariant),
           suffixIcon: ValueListenableBuilder<TextEditingValue>(
@@ -133,30 +139,31 @@ class _TrendingView extends ConsumerWidget {
     return trendingAsync.when(
       loading: () => _ShimmerGrid(),
       error: (error, _) => _ErrorView(
-        message: 'Could not load trending content.',
+        error: error,
+        message: 'No se ha podido cargar el contenido.',
         onRetry: () => ref.invalidate(trendingProvider),
       ),
       data: (items) {
         final sections = [
-          _MediaSection(title: 'Trending today', items: items),
+          _MediaSection(title: 'Tendencias de hoy', items: items),
           nowPlayingMoviesAsync.maybeWhen(
             data: (movies) => _MediaSection(
-              title: 'Now playing in Spain',
-              items: movies.take(10).toList(),
+              title: 'En cines en España',
+              items: movies,
             ),
             orElse: () => null,
           ),
           upcomingMoviesAsync.maybeWhen(
             data: (movies) => _MediaSection(
-              title: 'Upcoming movies',
-              items: movies.take(10).toList(),
+              title: 'Próximos estrenos',
+              items: movies,
             ),
             orElse: () => null,
           ),
           onTheAirTvAsync.maybeWhen(
             data: (shows) => _MediaSection(
-              title: 'On TV now',
-              items: shows.take(10).toList(),
+              title: 'En emisión',
+              items: shows,
             ),
             orElse: () => null,
           ),
@@ -166,7 +173,7 @@ class _TrendingView extends ConsumerWidget {
             .toList();
 
         if (sections.isEmpty) {
-          return const _EmptyView(message: 'No trending content found.');
+          return const _EmptyView(message: 'No se ha encontrado contenido.');
         }
         return _MediaGrid(
           sections: sections,
@@ -191,17 +198,18 @@ class _SearchResultsView extends ConsumerWidget {
     return resultsAsync.when(
       loading: () => _ShimmerGrid(),
       error: (error, _) => _ErrorView(
-        message: 'Search failed. Please try again.',
+        error: error,
+        message: 'La búsqueda ha fallado. Inténtalo de nuevo.',
         onRetry: () => ref.invalidate(searchResultsProvider),
       ),
       data: (items) {
         if (items.isEmpty) {
-          return _EmptyView(message: 'No results for "$query".');
+          return _EmptyView(message: 'No hay resultados para "$query".');
         }
         return _MediaGrid(
           sections: [
             _MediaSection(
-              title: 'Results for "$query"',
+              title: 'Resultados para "$query"',
               items: items,
             ),
           ],
@@ -261,8 +269,9 @@ class _MediaGrid extends StatelessWidget {
                 ),
                 childCount: section.items.length,
               ),
-              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                crossAxisCount: 2,
+              // Fixed max card width: 2 columns on phones, many on desktop.
+              gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+                maxCrossAxisExtent: _kCardMaxWidth,
                 childAspectRatio: 0.52,
                 crossAxisSpacing: 4,
                 mainAxisSpacing: 4,
@@ -327,13 +336,13 @@ class _ShimmerGridState extends State<_ShimmerGrid>
         )!;
         return GridView.builder(
           padding: const EdgeInsets.all(12),
-          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-            crossAxisCount: 2,
+          gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+            maxCrossAxisExtent: _kCardMaxWidth,
             childAspectRatio: 0.52,
             crossAxisSpacing: 8,
             mainAxisSpacing: 8,
           ),
-          itemCount: 10,
+          itemCount: 24,
           itemBuilder: (_, __) => Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -372,14 +381,51 @@ class _ShimmerGridState extends State<_ShimmerGrid>
 
 // ── Error / empty states ──────────────────────────────────────────────────────
 
-class _ErrorView extends StatelessWidget {
-  const _ErrorView({required this.message, required this.onRetry});
+class _ErrorView extends ConsumerWidget {
+  const _ErrorView({
+    required this.error,
+    required this.message,
+    required this.onRetry,
+  });
 
+  final Object error;
   final String message;
   final VoidCallback onRetry;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    if (TmdbService.isAuthError(error)) {
+      final hasKey = ref.watch(tmdbApiKeyProvider).isNotEmpty;
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(
+                Icons.key_rounded,
+                size: 56,
+                color: AppTheme.onSurfaceVariant,
+              ),
+              const SizedBox(height: 16),
+              Text(
+                hasKey
+                    ? 'TMDB ha rechazado la clave de API. Revísala e inténtalo de nuevo.'
+                    : 'Descubrir necesita una clave de API gratuita de TMDB para cargar películas y series.',
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: AppTheme.onSurface, fontSize: 15),
+              ),
+              const SizedBox(height: 20),
+              FilledButton.icon(
+                onPressed: () => showTmdbKeyDialog(context, ref),
+                icon: const Icon(Icons.vpn_key_rounded),
+                label: Text(hasKey ? 'Cambiar clave de API' : 'Añadir clave de API'),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(32),
@@ -404,7 +450,7 @@ class _ErrorView extends StatelessWidget {
             TextButton.icon(
               onPressed: onRetry,
               icon: const Icon(Icons.refresh_rounded),
-              label: const Text('Retry'),
+              label: const Text('Reintentar'),
             ),
           ],
         ),

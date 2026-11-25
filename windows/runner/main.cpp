@@ -13,6 +13,21 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
     CreateAndAttachConsole();
   }
 
+  // Put the app in a job object that kills its child processes when the app
+  // exits (even on a crash), so the bundled rqbit torrent engine never keeps
+  // running in the background on its own. The handle is intentionally kept
+  // open for the lifetime of the process.
+  if (HANDLE job = ::CreateJobObject(nullptr, nullptr)) {
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits = {};
+    limits.BasicLimitInformation.LimitFlags =
+        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_BREAKAWAY_OK;
+    if (!::SetInformationJobObject(job, JobObjectExtendedLimitInformation,
+                                   &limits, sizeof(limits)) ||
+        !::AssignProcessToJobObject(job, ::GetCurrentProcess())) {
+      ::CloseHandle(job);
+    }
+  }
+
   // Initialize COM, so that it is available for use in the library and/or
   // plugins.
   ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);

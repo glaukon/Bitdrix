@@ -38,6 +38,7 @@ class TorrentEntity {
     required this.seeds,
     this.errorMessage,
     this.streamUrl,
+    this.infoHash,
   });
 
   /// Unique identifier (UUID).
@@ -91,6 +92,9 @@ class TorrentEntity {
   /// HTTP streaming URL provided by the torrent engine (e.g. WebTorrent server).
   final String? streamUrl;
 
+  /// BitTorrent info hash (hex), once known.
+  final String? infoHash;
+
   // ── Derived helpers ────────────────────────────────────────────────────────
 
   /// Remaining bytes to download.
@@ -130,6 +134,8 @@ class TorrentEntity {
     int? seeds,
     String? errorMessage,
     String? streamUrl,
+    String? infoHash,
+    bool clearError = false,
   }) {
     return TorrentEntity(
       id: id ?? this.id,
@@ -147,8 +153,9 @@ class TorrentEntity {
       addedAt: addedAt ?? this.addedAt,
       peers: peers ?? this.peers,
       seeds: seeds ?? this.seeds,
-      errorMessage: errorMessage ?? this.errorMessage,
+      errorMessage: clearError ? null : (errorMessage ?? this.errorMessage),
       streamUrl: streamUrl ?? this.streamUrl,
+      infoHash: infoHash ?? this.infoHash,
     );
   }
 
@@ -169,7 +176,8 @@ class TorrentEntity {
           peers == other.peers &&
           seeds == other.seeds &&
           errorMessage == other.errorMessage &&
-          streamUrl == other.streamUrl;
+          streamUrl == other.streamUrl &&
+          identical(files, other.files);
 
   @override
   int get hashCode => Object.hash(id, status, progress);

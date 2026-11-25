@@ -27,10 +27,10 @@ class TorrentListScreen extends ConsumerWidget {
             child: torrents.isEmpty
                 ? EmptyState(
                     icon: Icons.downloading_rounded,
-                    title: 'No Torrents Yet',
+                    title: 'Todavía no hay torrents',
                     subtitle:
-                        'Add a magnet link or open a .torrent file to get started.',
-                    actionLabel: 'Add Torrent',
+                        'Añade un enlace magnet o abre un archivo .torrent para empezar.',
+                    actionLabel: 'Añadir torrent',
                     onAction: () => context.push('/torrents/add'),
                   )
                 : _buildList(torrents),
@@ -39,7 +39,7 @@ class TorrentListScreen extends ConsumerWidget {
       ),
       floatingActionButton: FloatingActionButton(
         onPressed: () => context.push('/torrents/add'),
-        tooltip: 'Add torrent',
+        tooltip: 'Añadir torrent',
         child: const Icon(Icons.add_rounded),
       ),
     );
@@ -55,14 +55,14 @@ class TorrentListScreen extends ConsumerWidget {
             icon: Icons.arrow_downward_rounded,
             color: AppTheme.accent,
             value: SpeedFormatter.format(dl),
-            label: 'Download',
+            label: 'Descarga',
           ),
           const SizedBox(width: 12),
           _StatChip(
             icon: Icons.arrow_upward_rounded,
             color: AppTheme.success,
             value: SpeedFormatter.format(ul),
-            label: 'Upload',
+            label: 'Subida',
           ),
           const Spacer(),
           Container(
@@ -76,7 +76,7 @@ class TorrentListScreen extends ConsumerWidget {
               ),
             ),
             child: Text(
-              '$active active',
+              '$active activos',
               style: const TextStyle(
                 color: AppTheme.primary,
                 fontSize: 12,

@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart'
 
 import '../../data/repositories/torrent_repository_impl.dart';
 import '../../data/services/native_torrent_service.dart';
+import '../../data/services/rqbit_torrent_service.dart';
 import '../../data/services/torrent_service.dart';
 import '../../data/services/webtorrent_service.dart'
     if (dart.library.io) '../../data/services/webtorrent_service_stub.dart';
@@ -20,16 +21,18 @@ import '../../domain/usecases/resume_torrent_usecase.dart';
 // ── Service / Repository ───────────────────────────────────────────────────────
 
 /// Singleton torrent service:
-/// - Web → WebTorrentService (JS interop)
-/// - Android / iOS → NativeTorrentService (libtorrent4j via platform channel)
-/// - Desktop → MockTorrentService (simulation)
+/// - Web → WebTorrentService (WebTorrent via JS interop)
+/// - Android → NativeTorrentService (libtorrent4j via platform channel)
+/// - Windows → RqbitTorrentService (bundled rqbit engine over local HTTP)
+/// - Other platforms → MockTorrentService (simulation, no engine yet)
 final torrentServiceProvider = Provider<ITorrentService>((ref) {
   final ITorrentService service;
   if (kIsWeb) {
     service = WebTorrentService();
-  } else if (defaultTargetPlatform == TargetPlatform.android ||
-      defaultTargetPlatform == TargetPlatform.iOS) {
+  } else if (defaultTargetPlatform == TargetPlatform.android) {
     service = NativeTorrentService();
+  } else if (defaultTargetPlatform == TargetPlatform.windows) {
+    service = RqbitTorrentService();
   } else {
     service = MockTorrentService();
   }

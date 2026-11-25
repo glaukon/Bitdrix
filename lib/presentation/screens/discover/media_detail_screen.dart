@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../data/models/media_model.dart';
 import '../../../data/models/stream_source_model.dart';
+import '../../providers/settings_providers.dart';
 import '../../providers/discover_providers.dart';
 import '../../providers/torrent_providers.dart';
 
@@ -150,7 +151,7 @@ class _DetailContent extends ConsumerWidget {
           ],
           if (media.overview != null && media.overview!.isNotEmpty) ...[
             const Text(
-              'Overview',
+              'Sinopsis',
               style: TextStyle(
                 color: AppTheme.onBackground,
                 fontSize: 16,
@@ -260,7 +261,7 @@ class _HeaderRow extends StatelessWidget {
                   ),
                 ),
                 child: Text(
-                  media.mediaType == 'tv' ? 'TV Series' : 'Movie',
+                  media.mediaType == 'tv' ? 'Serie' : 'Película',
                   style: TextStyle(
                     color: media.mediaType == 'tv'
                         ? AppTheme.accent
@@ -320,11 +321,11 @@ class _TvInfoRow extends StatelessWidget {
 
   Color get _statusColor {
     switch (media.status) {
-      case 'Returning Series':
+      case 'En emisión':
         return Colors.green;
-      case 'Ended':
+      case 'Finalizada':
         return Colors.grey;
-      case 'Canceled':
+      case 'Cancelada':
         return Colors.red;
       default:
         return Colors.blue;
@@ -333,10 +334,10 @@ class _TvInfoRow extends StatelessWidget {
 
   String get _statusLabel {
     switch (media.status) {
-      case 'Returning Series':
-        return 'Ongoing';
-      case 'Canceled':
-        return 'Cancelled';
+      case 'En emisión':
+        return 'En emisión';
+      case 'Cancelada':
+        return 'Cancelada';
       default:
         return media.status ?? '';
     }
@@ -381,7 +382,7 @@ class _TvInfoRow extends StatelessWidget {
         ],
         if (media.numberOfSeasons != null)
           Text(
-            '${media.numberOfSeasons} Season${media.numberOfSeasons != 1 ? 's' : ''}',
+            '${media.numberOfSeasons} temporada${media.numberOfSeasons != 1 ? 's' : ''}',
             style:
                 const TextStyle(color: AppTheme.onSurfaceVariant, fontSize: 14),
           ),
@@ -403,7 +404,7 @@ class _GetSourcesButton extends StatelessWidget {
       child: ElevatedButton.icon(
         onPressed: () => _onPressed(context),
         icon: const Icon(Icons.play_arrow_rounded),
-        label: const Text('Get Sources'),
+        label: const Text('Buscar fuentes'),
         style: ElevatedButton.styleFrom(
           backgroundColor: AppTheme.primary,
           foregroundColor: Colors.white,
@@ -481,7 +482,7 @@ class _EpisodePickerSheetState extends State<_EpisodePickerSheet> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const Text(
-            'Select Episode',
+            'Elegir episodio',
             style: TextStyle(
               color: AppTheme.onBackground,
               fontSize: 18,
@@ -495,7 +496,7 @@ class _EpisodePickerSheetState extends State<_EpisodePickerSheet> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text('Season',
+                    const Text('Temporada',
                         style: TextStyle(
                             color: AppTheme.onSurfaceVariant, fontSize: 13)),
                     const SizedBox(height: 8),
@@ -513,7 +514,7 @@ class _EpisodePickerSheetState extends State<_EpisodePickerSheet> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text('Episode',
+                    const Text('Episodio',
                         style: TextStyle(
                             color: AppTheme.onSurfaceVariant, fontSize: 13)),
                     const SizedBox(height: 8),
@@ -541,7 +542,7 @@ class _EpisodePickerSheetState extends State<_EpisodePickerSheet> {
                     borderRadius: BorderRadius.circular(12)),
               ),
               child: Text(
-                'Find Sources — S${_season.toString().padLeft(2, '0')}E${_episode.toString().padLeft(2, '0')}',
+                'Buscar fuentes — T${_season.toString().padLeft(2, '0')}E${_episode.toString().padLeft(2, '0')}',
                 style:
                     const TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
               ),
@@ -670,21 +671,54 @@ class _SourcesSheet extends ConsumerWidget {
                               size: 48, color: AppTheme.onSurfaceVariant),
                           SizedBox(height: 12),
                           Text(
-                            'No sources found',
+                            'No se han encontrado fuentes',
                             style: TextStyle(color: AppTheme.onSurface),
                           ),
                         ],
                       ),
                     );
                   }
-                  return ListView.separated(
-                    controller: scrollController,
-                    padding: const EdgeInsets.symmetric(vertical: 8),
-                    itemCount: sources.length,
-                    separatorBuilder: (_, __) =>
-                        const Divider(height: 1, indent: 16, endIndent: 16),
-                    itemBuilder: (_, i) =>
-                        _SourceTile(source: sources[i], media: media),
+                  final castilianOnly = ref.watch(castilianOnlyProvider);
+                  final castilian =
+                      sources.where((s) => s.hasCastilianAudioTag).toList();
+                  final shown = castilianOnly ? castilian : sources;
+                  return Column(
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                        child: Align(
+                          alignment: Alignment.centerLeft,
+                          child: FilterChip(
+                            selected: castilianOnly,
+                            onSelected: (v) =>
+                                ref.read(castilianOnlyProvider.notifier).set(v),
+                            avatar: const Icon(Icons.record_voice_over_rounded, size: 18),
+                            label: Text(
+                              'Solo audio en castellano (${castilian.length})',
+                            ),
+                          ),
+                        ),
+                      ),
+                      Expanded(
+                        child: shown.isEmpty
+                            ? _NoCastilianSources(
+                                total: sources.length,
+                                onShowAll: () => ref
+                                    .read(castilianOnlyProvider.notifier)
+                                    .set(false),
+                              )
+                            : ListView.separated(
+                                controller: scrollController,
+                                padding:
+                                    const EdgeInsets.symmetric(vertical: 8),
+                                itemCount: shown.length,
+                                separatorBuilder: (_, __) => const Divider(
+                                    height: 1, indent: 16, endIndent: 16),
+                                itemBuilder: (_, i) =>
+                                    _SourceTile(source: shown[i], media: media),
+                              ),
+                      ),
+                    ],
                   );
                 },
               ),
@@ -692,6 +726,40 @@ class _SourcesSheet extends ConsumerWidget {
           ],
         );
       },
+    );
+  }
+}
+
+class _NoCastilianSources extends StatelessWidget {
+  const _NoCastilianSources({required this.total, required this.onShowAll});
+
+  final int total;
+  final VoidCallback onShowAll;
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(28),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.volume_off_rounded,
+                size: 48, color: AppTheme.onSurfaceVariant),
+            const SizedBox(height: 12),
+            const Text(
+              'No hay fuentes con audio en castellano para este título.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: AppTheme.onSurface),
+            ),
+            const SizedBox(height: 16),
+            TextButton(
+              onPressed: onShowAll,
+              child: Text('Ver todas las fuentes ($total)'),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
@@ -716,7 +784,7 @@ class _SourcesError extends StatelessWidget {
             ),
             const SizedBox(height: 12),
             const Text(
-              'Could not load sources',
+              'No se han podido cargar las fuentes',
               style: TextStyle(
                 color: AppTheme.onSurface,
                 fontSize: 15,
@@ -727,7 +795,7 @@ class _SourcesError extends StatelessWidget {
             TextButton.icon(
               onPressed: onRetry,
               icon: const Icon(Icons.refresh_rounded),
-              label: const Text('Retry'),
+              label: const Text('Reintentar'),
             ),
           ],
         ),
@@ -801,10 +869,14 @@ class _SourceTile extends ConsumerWidget {
     if (!context.mounted) return;
 
     Navigator.of(context).pop();
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Descarga iniciada')),
-    );
-    GoRouter.of(context).push('/torrents/$torrentId');
+    // Go straight to the pre-load screen; it opens the player when ready.
+    GoRouter.of(context).push('/prepare', extra: {
+      'torrentId': torrentId,
+      'title': media.displayTitle,
+      'backdropUrl': media.backdropUrl,
+      'posterUrl': media.posterUrl,
+      'fileName': source.behaviorHintsFilename,
+    });
   }
 }
 
@@ -828,7 +900,7 @@ class _SourceMeta extends StatelessWidget {
         children: [
           if (seeders != null)
             Text(
-              '$seeders seeders',
+              '$seeders semillas',
               style: const TextStyle(
                 color: AppTheme.onSurfaceVariant,
                 fontSize: 12,

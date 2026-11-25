@@ -8,91 +8,71 @@ import org.json.JSONArray
 import org.json.JSONObject
 import org.libtorrent4j.*
 import org.libtorrent4j.alerts.*
+import org.libtorrent4j.swig.error_code
+import org.libtorrent4j.swig.libtorrent
 import java.io.File
-import java.io.RandomAccessFile
-import java.net.ServerSocket
-import java.net.Socket
-import java.net.URLDecoder
-import java.nio.charset.StandardCharsets
 
 private const val TAG = "BitdrixTorrent"
 
-class TorrentEngine(context: Context) {
+/**
+ * Process-wide BitTorrent engine backed by libtorrent4j.
+ *
+ * It outlives the Activity so downloads keep going while the app is in the
+ * background (kept alive by [TorrentForegroundService]). Every torrent is
+ * persisted under `filesDir/torrents` (a small JSON meta file plus libtorrent
+ * resume data) and restored on the next start.
+ */
+class TorrentEngine private constructor(private val appContext: Context) {
 
-    private val session = SessionManager()
+    companion object {
+        @Volatile
+        private var instance: TorrentEngine? = null
 
-    // infoHash hex string → torrentId  (no TorrentHandle objects stored — they become
-    // dangling after the alert that provided them is freed by the GC)
-    private val hashToId = HashMap<String, String>()
-    // torrentId → infoHash hex string
-    private val idToHash = HashMap<String, String>()
-    // torrents added whose hash couldn't be extracted ahead of time; resolved in ADD_TORRENT alert
-    private val pendingIds = ArrayDeque<String>()
-    // torrentId -> file index currently selected for streaming.
-    private val streamingFileIndexes = HashMap<String, Int>()
-    private val lock = Any()
-    private var streamServer: ServerSocket? = null
-    private var streamServerPort: Int = 0
+        fun get(context: Context): TorrentEngine =
+            instance ?: synchronized(this) {
+                instance ?: TorrentEngine(context.applicationContext).also { instance = it }
+            }
 
-    var onUpdate: ((String) -> Unit)? = null
-
-    private val saveDir: File = run {
-        val extDir = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
-        File(extDir ?: context.filesDir, "Bitdrix").also { it.mkdirs() }
+        /** Returns the engine only if it was already created (never creates one). */
+        fun peek(): TorrentEngine? = instance
     }
 
+    data class Summary(val active: Int, val downloadRate: Long, val streaming: Boolean)
+
+    private val session = SessionManager()
+    private val lock = Any()
+
+    // infoHash (hex, lowercase) ↔ torrentId. Handles are never cached: handles
+    // obtained from alerts dangle once the alert is freed.
+    private val hashToId = HashMap<String, String>()
+    private val idToHash = HashMap<String, String>()
+    // Magnets whose hash could not be parsed up front; resolved on ADD_TORRENT.
+    private val pendingIds = ArrayDeque<String>()
+    private val metas = HashMap<String, JSONObject>()
+    // torrentId → file index currently being streamed.
+    private val streamingFileIndexes = HashMap<String, Int>()
+
+    /** Receives status JSON payloads (set by the Activity while Flutter is attached). */
+    @Volatile
+    var onUpdate: ((String) -> Unit)? = null
+
+    val saveDir: File = run {
+        val extDir = appContext.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
+        File(extDir ?: appContext.filesDir, "Bitdrix").also { it.mkdirs() }
+    }
+    private val stateDir: File = File(appContext.filesDir, "torrents").also { it.mkdirs() }
+
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private val streamServer = StreamServer(this)
 
     private val alertListener = object : AlertListener {
         override fun types(): IntArray? = null
 
         override fun alert(alert: Alert<*>) {
-            when (alert.type()) {
-                AlertType.ADD_TORRENT -> {
-                    val a = alert as AddTorrentAlert
-                    Log.d(TAG, "ADD_TORRENT alert, error=${a.error().isError} msg=${a.error().message}")
-                    if (a.error().isError) return
-                    // Extract hash as a plain String immediately; do NOT store the handle —
-                    // its C++ memory is owned by the alert and becomes invalid after this callback.
-                    val hash = normalizeHash(a.handle().infoHash().toHex())
-                    Log.d(TAG, "ADD_TORRENT hash=$hash")
-                    synchronized(lock) {
-                        var id = hashToId[hash]
-                        if (id == null && pendingIds.isNotEmpty()) {
-                            id = pendingIds.removeFirst()
-                            hashToId[hash] = id
-                            idToHash[id] = hash
-                            Log.d(TAG, "Resolved pending torrent id=$id via ADD_TORRENT alert")
-                        }
-                        if (id == null) {
-                            Log.w(TAG, "ADD_TORRENT: no id found for hash=$hash, ignoring")
-                        }
-                    }
-                    requestTorrentUpdates()
-                }
-                AlertType.METADATA_RECEIVED -> {
-                    val hash = normalizeHash((alert as MetadataReceivedAlert).handle().infoHash().toHex())
-                    Log.d(TAG, "METADATA_RECEIVED hash=$hash")
-                    requestTorrentUpdates()
-                }
-                AlertType.TORRENT_FINISHED -> {
-                    Log.d(TAG, "TORRENT_FINISHED")
-                    requestTorrentUpdates()
-                }
-                AlertType.STATE_UPDATE -> { /* handled by startPollLoop */ }
-                AlertType.TORRENT_ERROR -> {
-                    val a = alert as TorrentErrorAlert
-                    val hash = normalizeHash(a.handle().infoHash().toHex())
-                    val id = synchronized(lock) { hashToId[hash] } ?: return
-                    onUpdate?.invoke(
-                        JSONObject()
-                            .put("id", id)
-                            .put("status", "error")
-                            .put("errorMessage", a.error().message)
-                            .toString()
-                    )
-                }
-                else -> {}
+            try {
+                handleAlert(alert)
+            } catch (e: Exception) {
+                Log.w(TAG, "alert ${alert.type()} failed: ${e.message}")
             }
         }
     }
@@ -102,7 +82,7 @@ class TorrentEngine(context: Context) {
         session.start()
         session.startDht()
         Log.d(TAG, "Session started, saveDir=$saveDir")
-        requestTorrentUpdates()
+        restoreTorrents()
         startPollLoop()
     }
 
@@ -111,23 +91,29 @@ class TorrentEngine(context: Context) {
     fun addTorrentFile(filePath: String, torrentId: String) {
         scope.launch {
             try {
-                val f = File(filePath)
-                if (!f.exists()) {
+                val src = File(filePath)
+                if (!src.exists()) {
                     emitError(torrentId, "Archivo torrent no encontrado: $filePath")
                     return@launch
                 }
-                val ti = TorrentInfo(f)
+                // Keep our own copy: picked files usually live in a cache dir.
+                val copy = File(stateDir, "$torrentId.torrent")
+                src.copyTo(copy, overwrite = true)
+
+                val ti = TorrentInfo(copy)
                 val hash = normalizeHash(ti.infoHash().toHex())
+                val meta = newMeta(torrentId).put("hash", hash).put("torrentFile", copy.absolutePath)
                 synchronized(lock) {
-                    hashToId[hash] = torrentId
-                    idToHash[torrentId] = hash
-                    Log.d(TAG, "addTorrentFile id=$torrentId hash=$hash name=${ti.name()}")
+                    registerLocked(torrentId, hash)
+                    metas[torrentId] = meta
                 }
-                val swigP = org.libtorrent4j.swig.add_torrent_params()
-                swigP.set_ti(ti.swig())
-                swigP.setSave_path(saveDir.absolutePath)
-                session.swig().async_add_torrent(swigP)
-                Log.d(TAG, "async_add_torrent (file) dispatched for id=$torrentId")
+                writeMeta(torrentId, meta)
+
+                val p = org.libtorrent4j.swig.add_torrent_params()
+                p.set_ti(ti.swig())
+                p.setSave_path(saveDir.absolutePath)
+                session.swig().async_add_torrent(p)
+                TorrentForegroundService.ensureRunning(appContext)
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
                 Log.e(TAG, "addTorrentFile error: ${e.message}", e)
@@ -139,39 +125,50 @@ class TorrentEngine(context: Context) {
     fun addMagnet(magnetLink: String, torrentId: String) {
         scope.launch {
             try {
-                val hash = extractInfoHash(magnetLink)
+                val hash = extractInfoHash(magnetLink)?.let(::normalizeHash)
+                val meta = newMeta(torrentId).put("magnet", magnetLink)
+                if (hash != null) meta.put("hash", hash)
                 synchronized(lock) {
-                    if (hash != null) {
-                        val normalized = normalizeHash(hash)
-                        hashToId[normalized] = torrentId
-                        idToHash[torrentId] = normalized
-                        Log.d(TAG, "addMagnet torrentId=$torrentId hash=$normalized")
-                    } else {
-                        pendingIds.addLast(torrentId)
-                        Log.d(TAG, "addMagnet torrentId=$torrentId, hash unknown — queued as pending")
-                    }
+                    if (hash != null) registerLocked(torrentId, hash) else pendingIds.addLast(torrentId)
+                    metas[torrentId] = meta
                 }
+                writeMeta(torrentId, meta)
+
                 val params = AddTorrentParams.parseMagnetUri(magnetLink)
                 params.savePath = saveDir.absolutePath
                 session.swig().async_add_torrent(params.swig())
-                Log.d(TAG, "async_add_torrent dispatched for torrentId=$torrentId")
+                TorrentForegroundService.ensureRunning(appContext)
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
                 Log.e(TAG, "addMagnet exception: ${e.message}", e)
-                synchronized(lock) { pendingIds.removeLastOrNull() }
+                synchronized(lock) { pendingIds.remove(torrentId) }
                 emitError(torrentId, e.message ?: "Error desconocido")
             }
         }
     }
 
     fun pause(torrentId: String) {
-        synchronized(lock) { findHandleLocked(torrentId)?.pause() }
-        requestTorrentUpdates()
+        synchronized(lock) {
+            findHandleLocked(torrentId)?.let { h ->
+                // Auto-managed torrents get resumed by the session queue, so a
+                // user pause must take the torrent out of auto management.
+                h.unsetFlags(TorrentFlags.AUTO_MANAGED)
+                h.pause()
+                h.saveResumeData(TorrentHandle.SAVE_INFO_DICT)
+            }
+        }
+        emitStatusForAllHandles()
     }
 
     fun resume(torrentId: String) {
-        synchronized(lock) { findHandleLocked(torrentId)?.resume() }
-        requestTorrentUpdates()
+        synchronized(lock) {
+            findHandleLocked(torrentId)?.let { h ->
+                h.setFlags(TorrentFlags.AUTO_MANAGED)
+                h.resume()
+            }
+        }
+        TorrentForegroundService.ensureRunning(appContext)
+        emitStatusForAllHandles()
     }
 
     fun remove(torrentId: String, deleteFiles: Boolean) {
@@ -179,24 +176,32 @@ class TorrentEngine(context: Context) {
             val handle = findHandleLocked(torrentId)
             idToHash.remove(torrentId)?.let(hashToId::remove)
             hashToId.entries.removeIf { it.value == torrentId }
+            pendingIds.remove(torrentId)
             streamingFileIndexes.remove(torrentId)
-            if (handle == null) return
-            val removeFlags = if (deleteFiles) {
-                SessionHandle.DELETE_FILES
-            } else {
-                org.libtorrent4j.swig.remove_flags_t()
+            metas.remove(torrentId)
+            if (handle != null) {
+                val flags = if (deleteFiles) SessionHandle.DELETE_FILES else org.libtorrent4j.swig.remove_flags_t()
+                session.remove(handle, flags)
             }
-            session.remove(handle, removeFlags)
         }
+        listOf("json", "resume", "torrent").forEach { File(stateDir, "$torrentId.$it").delete() }
     }
 
-    fun getFiles(torrentId: String): String {
-        return synchronized(lock) {
-            val handle = findHandleLocked(torrentId) ?: return@synchronized "[]"
-            buildFilesJsonArrayLocked(torrentId, handle).toString()
-        }
+    /** Forces an immediate status emission for every torrent. */
+    fun refresh() {
+        scope.launch { emitStatusForAllHandles() }
     }
 
+    fun getFiles(torrentId: String): String = synchronized(lock) {
+        val handle = findHandleLocked(torrentId) ?: return@synchronized "[]"
+        buildFilesJsonArrayLocked(torrentId, handle).toString()
+    }
+
+    /**
+     * Marks [fileId] as the file being streamed and returns its local HTTP URL.
+     * The torrent keeps downloading the other files, but the streamed file gets
+     * top priority and time-critical piece deadlines.
+     */
     fun selectFile(torrentId: String, fileId: String): String? {
         synchronized(lock) {
             val handle = findHandleLocked(torrentId) ?: return null
@@ -205,502 +210,311 @@ class TorrentEngine(context: Context) {
             val fileIndex = fileId.substringAfterLast('-').toIntOrNull() ?: return null
             if (fileIndex !in 0 until fs.numFiles()) return null
 
-            val priorities = Array(fs.numFiles()) { Priority.LOW }
-            priorities[fileIndex] = Priority.TOP_PRIORITY
+            val current = handle.filePriorities()
+            val priorities = Array(fs.numFiles()) { i ->
+                when {
+                    i == fileIndex -> Priority.TOP_PRIORITY
+                    current.getOrNull(i) == Priority.IGNORE -> Priority.IGNORE
+                    else -> Priority.DEFAULT
+                }
+            }
             handle.prioritizeFiles(priorities)
             streamingFileIndexes[torrentId] = fileIndex
-            prepareStreamingPieces(handle, fs, fileIndex)
 
+            handle.setFlags(TorrentFlags.AUTO_MANAGED)
             handle.resume()
-            return streamUrl(torrentId, fileIndex)
+            try { handle.queuePositionTop() } catch (_: Exception) {}
+            try { handle.forceReannounce(0, -1, TorrentHandle.IGNORE_MIN_INTERVAL) } catch (_: Exception) {}
+
+            // Warm up the start and the tail (container indexes) before the player connects.
+            val startPiece = fs.pieceIndexAtFile(fileIndex)
+            val endPiece = fs.lastPieceIndexAtFile(fileIndex)
+            if (startPiece in 0..endPiece) {
+                try { handle.setSequentialRange(startPiece, endPiece) } catch (_: Exception) {}
+                setDeadlines(handle, startPiece, endPiece, readAheadPieces(fs))
+                for ((i, piece) in (maxOf(startPiece, endPiece - 1)..endPiece).withIndex()) {
+                    try { handle.setPieceDeadline(piece, 1_500 + i * 250) } catch (_: Exception) {}
+                }
+            }
+        }
+        TorrentForegroundService.ensureRunning(appContext)
+        return streamServer.urlFor(torrentId, fileIndexOf(fileId))
+    }
+
+    fun summary(): Summary {
+        var active = 0
+        var rate = 0L
+        synchronized(lock) {
+            for (hash in idToHash.values) {
+                val h = findByHash(hash) ?: continue
+                val st = try { h.status() } catch (_: Exception) { continue }
+                val paused = st.flags().and_(TorrentFlags.PAUSED).non_zero()
+                if (!paused && !st.isFinished) active++
+                rate += st.downloadRate().toLong()
+            }
+        }
+        return Summary(active, rate, streamServer.activeClients() > 0)
+    }
+
+    /** Persists resume data for every torrent (call when the UI goes away). */
+    fun saveAll() {
+        synchronized(lock) {
+            for (hash in idToHash.values) {
+                try {
+                    findByHash(hash)?.saveResumeData(TorrentHandle.SAVE_INFO_DICT)
+                } catch (_: Exception) {
+                }
+            }
         }
     }
 
-    fun dispose() {
-        scope.cancel()
-        try { streamServer?.close() } catch (_: Exception) {}
-        streamServer = null
-        session.removeListener(alertListener)
-        session.stop()
+    // ── Streaming support (used by StreamServer) ──────────────────────────────
+
+    internal data class StreamTarget(
+        val handle: TorrentHandle,
+        val fs: FileStorage,
+        val index: Int,
+        val file: File,
+        val size: Long,
+    )
+
+    internal fun streamTarget(torrentId: String, fileIndex: Int): StreamTarget? = synchronized(lock) {
+        val handle = findHandleLocked(torrentId) ?: return@synchronized null
+        val ti = handle.torrentFile() ?: return@synchronized null
+        val fs = ti.files()
+        if (fileIndex !in 0 until fs.numFiles()) return@synchronized null
+        streamingFileIndexes[torrentId] = fileIndex
+        StreamTarget(handle, fs, fileIndex, File(saveDir, fs.filePath(fileIndex)), fs.fileSize(fileIndex))
     }
 
-    // ── Private helpers ───────────────────────────────────────────────────────
+    internal fun readAheadPieces(fs: FileStorage): Int {
+        val pieceLength = fs.pieceLength().toLong().coerceAtLeast(1L)
+        return (24L * 1024 * 1024 / pieceLength).toInt().coerceIn(6, 64)
+    }
 
-    /**
-     * Returns a FRESH TorrentHandle obtained directly from the session.
-     * Never uses a cached handle — avoids dangling-pointer crashes from handles
-     * that were previously obtained from alert callbacks (swigCMemOwn = false).
-     * Must be called with [lock] held.
-     */
-    private fun findHandleLocked(torrentId: String): TorrentHandle? {
-        val hash = idToHash[torrentId] ?: return null
+    /** Gives the next [count] missing pieces from [fromPiece] increasing deadlines. */
+    internal fun setDeadlines(handle: TorrentHandle, fromPiece: Int, lastPiece: Int, count: Int) {
+        var slot = 0
+        var piece = fromPiece
+        while (piece <= lastPiece && slot < count) {
+            try {
+                if (!handle.havePiece(piece)) {
+                    handle.piecePriority(piece, Priority.TOP_PRIORITY)
+                    handle.setPieceDeadline(piece, slot * 200, TorrentHandle.ALERT_WHEN_AVAILABLE)
+                    slot++
+                }
+            } catch (_: Exception) {
+                return
+            }
+            piece++
+        }
+    }
+
+    // ── Alerts ────────────────────────────────────────────────────────────────
+
+    private fun handleAlert(alert: Alert<*>) {
+        when (alert.type()) {
+            AlertType.ADD_TORRENT -> {
+                val a = alert as AddTorrentAlert
+                if (a.error().isError) {
+                    Log.w(TAG, "ADD_TORRENT error: ${a.error().message}")
+                    return
+                }
+                val hash = normalizeHash(a.handle().infoHash().toHex())
+                synchronized(lock) {
+                    if (hashToId[hash] == null && pendingIds.isNotEmpty()) {
+                        val id = pendingIds.removeFirst()
+                        registerLocked(id, hash)
+                        metas[id]?.let { writeMeta(id, it.put("hash", hash)) }
+                    }
+                }
+                scope.launch { emitStatusForAllHandles() }
+            }
+            AlertType.METADATA_RECEIVED -> {
+                // Persist the info dict so a restart does not need the swarm again.
+                (alert as MetadataReceivedAlert).handle().saveResumeData(TorrentHandle.SAVE_INFO_DICT)
+                scope.launch { emitStatusForAllHandles() }
+            }
+            AlertType.TORRENT_FINISHED -> {
+                (alert as TorrentFinishedAlert).handle().saveResumeData(TorrentHandle.SAVE_INFO_DICT)
+                scope.launch { emitStatusForAllHandles() }
+            }
+            AlertType.SAVE_RESUME_DATA -> {
+                val a = alert as SaveResumeDataAlert
+                val hash = normalizeHash(a.handle().infoHash().toHex())
+                val id = synchronized(lock) { hashToId[hash] } ?: return
+                val bytes = AddTorrentParams.writeResumeDataBuf(a.params())
+                scope.launch {
+                    try {
+                        val tmp = File(stateDir, "$id.resume.tmp")
+                        tmp.writeBytes(bytes)
+                        tmp.renameTo(File(stateDir, "$id.resume").also { it.delete() })
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Could not write resume data for $id: ${e.message}")
+                    }
+                }
+            }
+            AlertType.TORRENT_ERROR -> {
+                val a = alert as TorrentErrorAlert
+                val hash = normalizeHash(a.handle().infoHash().toHex())
+                val id = synchronized(lock) { hashToId[hash] } ?: return
+                emitError(id, a.error().message)
+            }
+            else -> {}
+        }
+    }
+
+    // ── Persistence ───────────────────────────────────────────────────────────
+
+    private fun newMeta(id: String) = JSONObject().put("id", id).put("addedAt", System.currentTimeMillis())
+
+    private fun writeMeta(id: String, meta: JSONObject) {
+        try {
+            File(stateDir, "$id.json").writeText(meta.toString())
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not write meta for $id: ${e.message}")
+        }
+    }
+
+    private fun restoreTorrents() {
+        val files = stateDir.listFiles { f -> f.name.endsWith(".json") } ?: return
+        for (metaFile in files) {
+            try {
+                val meta = JSONObject(metaFile.readText())
+                val id = meta.getString("id")
+                val hash = meta.optString("hash").takeIf { it.length == 40 }
+                val params = loadParams(id, meta) ?: continue
+                params.setSave_path(saveDir.absolutePath)
+                synchronized(lock) {
+                    metas[id] = meta
+                    if (hash != null) registerLocked(id, hash) else pendingIds.addLast(id)
+                }
+                session.swig().async_add_torrent(params)
+                Log.d(TAG, "Restored torrent id=$id hash=$hash")
+            } catch (e: Exception) {
+                Log.w(TAG, "Could not restore ${metaFile.name}: ${e.message}")
+            }
+        }
+    }
+
+    private fun loadParams(id: String, meta: JSONObject): org.libtorrent4j.swig.add_torrent_params? {
+        val resume = File(stateDir, "$id.resume")
+        if (resume.exists()) {
+            val ec = error_code()
+            val p = libtorrent.read_resume_data_ex(Vectors.bytes2byte_vector(resume.readBytes()), ec)
+            if (ec.value() == 0) return p
+            Log.w(TAG, "Bad resume data for $id: ${ec.message()}")
+        }
+        meta.optString("torrentFile").takeIf { it.isNotEmpty() && File(it).exists() }?.let {
+            val p = org.libtorrent4j.swig.add_torrent_params()
+            p.set_ti(TorrentInfo(File(it)).swig())
+            return p
+        }
+        meta.optString("magnet").takeIf { it.isNotEmpty() }?.let {
+            return AddTorrentParams.parseMagnetUri(it).swig()
+        }
+        return null
+    }
+
+    // ── Status ────────────────────────────────────────────────────────────────
+
+    private fun registerLocked(id: String, hash: String) {
+        hashToId[hash] = id
+        idToHash[id] = hash
+    }
+
+    private fun findByHash(hash: String): TorrentHandle? {
         if (hash.length != 40) return null
         return try {
-            val h = session.find(Sha1Hash.parseHex(hash))
-            if (h != null && h.isValid) h else null
+            session.find(Sha1Hash.parseHex(hash))?.takeIf { it.isValid }
         } catch (_: RuntimeException) {
             null
         }
     }
 
-    private fun emitStatusJsonLocked(
-        id: String,
-        st: TorrentStatus,
-        knownHandle: TorrentHandle? = null,
-    ): String {
-        val infoHashes = st.getInfoHashes()
-        val resolvedHash = when {
-            infoHashes.hasV1() -> normalizeHash(infoHashes.getV1().toHex())
-            else -> normalizeHash(infoHashes.getBest().toHex())
-        }
-        idToHash[id] = resolvedHash
-        hashToId[resolvedHash] = id
+    private fun findHandleLocked(torrentId: String): TorrentHandle? =
+        idToHash[torrentId]?.let(::findByHash)
+
+    private fun fileIndexOf(fileId: String): Int = fileId.substringAfterLast('-').toIntOrNull() ?: 0
+
+    private fun statusJsonLocked(id: String, handle: TorrentHandle): String {
+        val st = handle.status()
         val state = st.state()
         val isPaused = st.flags().and_(TorrentFlags.PAUSED).non_zero()
         val statusStr = when {
-            state == TorrentStatus.State.FINISHED ||
-            state == TorrentStatus.State.SEEDING -> "completed"
+            st.isFinished || state == TorrentStatus.State.FINISHED || state == TorrentStatus.State.SEEDING -> "completed"
             isPaused -> "paused"
-            state == TorrentStatus.State.DOWNLOADING ||
-            state == TorrentStatus.State.DOWNLOADING_METADATA -> "downloading"
+            state == TorrentStatus.State.DOWNLOADING || state == TorrentStatus.State.DOWNLOADING_METADATA -> "downloading"
             else -> "queued"
         }
-        // st.name() is blank until metadata arrives; fall back to TorrentInfo.name().
-        val resolvedName = st.name().ifBlank {
-            val h = knownHandle ?: try { session.find(Sha1Hash.parseHex(resolvedHash)) } catch (_: Exception) { null }
-            h?.torrentFile()?.name()?.ifBlank { null }
-        } ?: "Resolviendo metadatos..."
-        if (knownHandle != null) {
-            ensureStreamingCandidateLocked(id, knownHandle)
-        }
+        val name = st.name().ifBlank { handle.torrentFile()?.name().orEmpty() }.ifBlank { "Resolviendo metadatos..." }
+        val meta = metas[id]
         return JSONObject()
             .put("id", id)
-            .put("name", resolvedName)
+            .put("infoHash", idToHash[id])
+            .put("name", name)
             .put("progress", st.progress().toDouble())
             .put("downloadSpeed", st.downloadRate().toLong())
             .put("uploadSpeed", st.uploadRate().toLong())
             .put("peers", st.numPeers())
             .put("seeds", st.numSeeds())
             .put("downloadedSize", st.totalWantedDone())
-            .put("uploadedSize", st.totalUpload())
+            .put("uploadedSize", st.allTimeUpload())
             .put("totalSize", st.totalWanted())
             .put("status", statusStr)
-            .put("files", knownHandle?.let { buildFilesJsonArrayLocked(id, it) } ?: JSONArray())
+            .put("hasMetadata", st.hasMetadata())
+            .put("addedAt", meta?.optLong("addedAt") ?: 0L)
+            .put("magnet", meta?.optString("magnet")?.ifEmpty { null })
+            .put("files", buildFilesJsonArrayLocked(id, handle))
             .toString()
-    }
-
-    private fun ensureStreamingCandidateLocked(torrentId: String, handle: TorrentHandle) {
-        if (streamingFileIndexes.containsKey(torrentId)) return
-        val ti = handle.torrentFile() ?: return
-        val fs = ti.files()
-        if (fs.numFiles() <= 0) return
-
-        var selectedIndex = -1
-        var selectedSize = -1L
-        for (i in 0 until fs.numFiles()) {
-            val path = fs.filePath(i).lowercase()
-            val isVideo = path.endsWith(".mp4") ||
-                path.endsWith(".mkv") ||
-                path.endsWith(".avi") ||
-                path.endsWith(".mov") ||
-                path.endsWith(".webm") ||
-                path.endsWith(".m4v")
-            val size = fs.fileSize(i)
-            if (isVideo && size > selectedSize) {
-                selectedIndex = i
-                selectedSize = size
-            }
-        }
-        if (selectedIndex < 0) {
-            for (i in 0 until fs.numFiles()) {
-                val size = fs.fileSize(i)
-                if (size > selectedSize) {
-                    selectedIndex = i
-                    selectedSize = size
-                }
-            }
-        }
-        if (selectedIndex < 0) return
-
-        val priorities = Array(fs.numFiles()) { Priority.LOW }
-        priorities[selectedIndex] = Priority.TOP_PRIORITY
-        try { handle.prioritizeFiles(priorities) } catch (_: Exception) {}
-        streamingFileIndexes[torrentId] = selectedIndex
-        prepareStreamingPieces(handle, fs, selectedIndex)
-    }
-
-    private fun prepareStreamingPieces(handle: TorrentHandle, fs: FileStorage, fileIndex: Int) {
-        try { handle.queuePositionTop() } catch (_: Exception) {}
-        try { handle.forceReannounce(0, 0, TorrentHandle.IGNORE_MIN_INTERVAL) } catch (_: Exception) {}
-
-        val startPiece = fs.pieceIndexAtFile(fileIndex)
-        val endPiece = fs.lastPieceIndexAtFile(fileIndex)
-        if (startPiece >= 0 && endPiece >= startPiece) {
-            try { handle.setSequentialRange(startPiece, endPiece) } catch (_: Exception) {}
-            prioritizeStreamingPieces(handle, startPiece, endPiece)
-        }
-    }
-
-    private fun streamUrl(torrentId: String, fileIndex: Int): String {
-        ensureStreamServer()
-        return "http://127.0.0.1:$streamServerPort/stream/$torrentId/$fileIndex"
-    }
-
-    private fun ensureStreamServer() {
-        if (streamServer != null) return
-        val server = ServerSocket(0, 50, java.net.InetAddress.getByName("127.0.0.1"))
-        streamServer = server
-        streamServerPort = server.localPort
-        scope.launch {
-            while (isActive && !server.isClosed) {
-                try {
-                    val socket = server.accept()
-                    launch { handleStreamClient(socket) }
-                } catch (_: Exception) {
-                    if (!server.isClosed) Log.w(TAG, "Stream server accept failed")
-                }
-            }
-        }
-        Log.d(TAG, "Local stream server listening on 127.0.0.1:$streamServerPort")
-    }
-
-    private fun handleStreamClient(socket: Socket) {
-        socket.use { s ->
-            try {
-                s.soTimeout = 30_000
-                val input = s.getInputStream()
-                val output = s.getOutputStream()
-                val request = readHttpRequest(input)
-                val requestLine = request.firstOrNull() ?: return
-                val parts = requestLine.split(' ')
-                if (parts.size < 2 || parts[0] != "GET") {
-                    writeHttpError(output, 405, "Method Not Allowed")
-                    return
-                }
-
-                val path = URLDecoder.decode(parts[1].substringBefore('?'), StandardCharsets.UTF_8.name())
-                val pathParts = path.trim('/').split('/')
-                if (pathParts.size != 3 || pathParts[0] != "stream") {
-                    writeHttpError(output, 404, "Not Found")
-                    return
-                }
-
-                val torrentId = pathParts[1]
-                val fileIndex = pathParts[2].toIntOrNull()
-                if (fileIndex == null) {
-                    writeHttpError(output, 400, "Bad Request")
-                    return
-                }
-
-                val rangeHeader = request.firstOrNull { it.startsWith("Range:", ignoreCase = true) }
-                serveStreamRange(output, torrentId, fileIndex, rangeHeader)
-            } catch (e: Exception) {
-                Log.w(TAG, "Stream request failed: ${e.message}")
-            }
-        }
-    }
-
-    private fun readHttpRequest(input: java.io.InputStream): List<String> {
-        val lines = mutableListOf<String>()
-        val current = StringBuilder()
-        while (true) {
-            val b = input.read()
-            if (b < 0) break
-            if (b == '\r'.code) continue
-            if (b == '\n'.code) {
-                val line = current.toString()
-                if (line.isEmpty()) break
-                lines.add(line)
-                current.clear()
-            } else {
-                current.append(b.toChar())
-            }
-            if (lines.size > 64 || current.length > 8192) break
-        }
-        return lines
-    }
-
-    private data class StreamFileSnapshot(
-        val handle: TorrentHandle,
-        val fs: FileStorage,
-        val path: File,
-        val size: Long,
-    )
-
-    private fun serveStreamRange(
-        output: java.io.OutputStream,
-        torrentId: String,
-        fileIndex: Int,
-        rangeHeader: String?,
-    ) {
-        val snapshot = synchronized(lock) {
-            val handle = findHandleLocked(torrentId) ?: return@synchronized null
-            val ti = handle.torrentFile() ?: return@synchronized null
-            val fs = ti.files()
-            if (fileIndex !in 0 until fs.numFiles()) return@synchronized null
-            streamingFileIndexes[torrentId] = fileIndex
-            prepareStreamingPieces(handle, fs, fileIndex)
-            StreamFileSnapshot(
-                handle = handle,
-                fs = fs,
-                path = File(saveDir, fs.filePath(fileIndex)),
-                size = fs.fileSize(fileIndex),
-            )
-        }
-        if (snapshot == null || snapshot.size <= 0L) {
-            writeHttpError(output, 404, "Not Found")
-            return
-        }
-
-        val requested = parseRange(rangeHeader, snapshot.size)
-        val start = requested.first
-        val end = requested.second
-        prioritizeRange(snapshot.handle, snapshot.fs, fileIndex, start, end)
-
-        if (!waitForRange(snapshot.handle, snapshot.fs, fileIndex, start, end, 20_000L)) {
-            output.write(
-                ("HTTP/1.1 503 Service Unavailable\r\n" +
-                    "Retry-After: 2\r\n" +
-                    "Connection: close\r\n" +
-                    "Content-Length: 0\r\n\r\n")
-                    .toByteArray()
-            )
-            return
-        }
-
-        val length = end - start + 1
-        val contentType = contentTypeFor(snapshot.path.name)
-        output.write(
-            ("HTTP/1.1 206 Partial Content\r\n" +
-                "Content-Type: $contentType\r\n" +
-                "Accept-Ranges: bytes\r\n" +
-                "Content-Range: bytes $start-$end/${snapshot.size}\r\n" +
-                "Content-Length: $length\r\n" +
-                "Connection: close\r\n\r\n")
-                .toByteArray()
-        )
-
-        RandomAccessFile(snapshot.path, "r").use { raf ->
-            raf.seek(start)
-            val buffer = ByteArray(64 * 1024)
-            var remaining = length
-            while (remaining > 0) {
-                val read = raf.read(buffer, 0, minOf(buffer.size.toLong(), remaining).toInt())
-                if (read <= 0) break
-                output.write(buffer, 0, read)
-                remaining -= read
-            }
-        }
-    }
-
-    private fun parseRange(rangeHeader: String?, size: Long): kotlin.Pair<Long, Long> {
-        if (rangeHeader == null) {
-            val end = minOf(size - 1, 1024L * 1024L - 1L)
-            return 0L to end
-        }
-        val value = rangeHeader.substringAfter(':').trim()
-        val range = value.removePrefix("bytes=").substringBefore(',')
-        val startText = range.substringBefore('-')
-        val endText = range.substringAfter('-', "")
-        val start = startText.toLongOrNull() ?: 0L
-        val end = endText.toLongOrNull() ?: minOf(size - 1, start + 1024L * 1024L - 1L)
-        return start.coerceIn(0L, size - 1) to end.coerceIn(start, size - 1)
-    }
-
-    private fun prioritizeRange(handle: TorrentHandle, fs: FileStorage, fileIndex: Int, start: Long, end: Long) {
-        val pieceLength = fs.pieceLength().toLong().coerceAtLeast(1L)
-        val fileOffset = fs.fileOffset(fileIndex)
-        val startPiece = ((fileOffset + start) / pieceLength).toInt()
-        val endPiece = ((fileOffset + end) / pieceLength).toInt()
-        for ((offset, piece) in (startPiece..endPiece).take(128).withIndex()) {
-            try {
-                handle.piecePriority(piece, Priority.TOP_PRIORITY)
-                handle.setPieceDeadline(piece, offset * 100, TorrentHandle.ALERT_WHEN_AVAILABLE)
-            } catch (_: Exception) {
-            }
-        }
-    }
-
-    private fun waitForRange(
-        handle: TorrentHandle,
-        fs: FileStorage,
-        fileIndex: Int,
-        start: Long,
-        end: Long,
-        timeoutMs: Long,
-    ): Boolean {
-        val pieceLength = fs.pieceLength().toLong().coerceAtLeast(1L)
-        val fileOffset = fs.fileOffset(fileIndex)
-        val startPiece = ((fileOffset + start) / pieceLength).toInt()
-        val endPiece = ((fileOffset + end) / pieceLength).toInt()
-        val deadline = System.currentTimeMillis() + timeoutMs
-        while (System.currentTimeMillis() < deadline) {
-            var ready = true
-            for (piece in startPiece..endPiece) {
-                if (!try { handle.havePiece(piece) } catch (_: Exception) { false }) {
-                    ready = false
-                    break
-                }
-            }
-            if (ready) return true
-            Thread.sleep(250)
-        }
-        return false
-    }
-
-    private fun writeHttpError(output: java.io.OutputStream, code: Int, message: String) {
-        val body = message.toByteArray()
-        output.write(
-            ("HTTP/1.1 $code $message\r\n" +
-                "Content-Type: text/plain\r\n" +
-                "Content-Length: ${body.size}\r\n" +
-                "Connection: close\r\n\r\n")
-                .toByteArray()
-        )
-        output.write(body)
-    }
-
-    private fun contentTypeFor(name: String): String {
-        val lower = name.lowercase()
-        return when {
-            lower.endsWith(".mp4") || lower.endsWith(".m4v") -> "video/mp4"
-            lower.endsWith(".webm") -> "video/webm"
-            lower.endsWith(".mkv") -> "video/x-matroska"
-            lower.endsWith(".avi") -> "video/x-msvideo"
-            else -> "application/octet-stream"
-        }
-    }
-
-    private fun prioritizeStreamingPieces(handle: TorrentHandle, startPiece: Int, endPiece: Int) {
-        try {
-            handle.clearPieceDeadlines()
-        } catch (_: Exception) {
-        }
-
-        val firstPieces = (startPiece..endPiece).take(96)
-        firstPieces.forEachIndexed { offset, piece ->
-            try {
-                handle.piecePriority(piece, Priority.TOP_PRIORITY)
-                handle.setPieceDeadline(piece, offset * 150, TorrentHandle.ALERT_WHEN_AVAILABLE)
-            } catch (_: Exception) {
-            }
-        }
-
-        // A few containers keep useful indexes near the end. Keep them requested,
-        // but behind the opening pieces so playback can start first.
-        val tailStart = maxOf(startPiece, endPiece - 3)
-        for (piece in tailStart..endPiece) {
-            try {
-                handle.piecePriority(piece, Priority.SIX)
-                handle.setPieceDeadline(piece, 20_000 + (piece - tailStart) * 250)
-            } catch (_: Exception) {
-            }
-        }
     }
 
     private fun buildFilesJsonArrayLocked(torrentId: String, handle: TorrentHandle): JSONArray {
         val ti = handle.torrentFile() ?: return JSONArray()
         val fs = ti.files()
-        // Try PIECE_GRANULARITY first (accurate per-piece tracking).
-        // In seeding state libtorrent may return all-zeros, so if every entry is zero
-        // we retry with the no-flag overload (raw byte tracking).
-        val pgPiece: LongArray = try { handle.fileProgress(TorrentHandle.PIECE_GRANULARITY) } catch (_: Exception) { LongArray(0) }
-        val fileProgress: LongArray = if (pgPiece.any { it > 0L }) pgPiece else {
-            try { handle.fileProgress() } catch (_: Exception) { LongArray(0) }
+        val fileProgress: LongArray = try {
+            handle.fileProgress(TorrentHandle.PIECE_GRANULARITY)
+        } catch (_: Exception) {
+            LongArray(0)
         }
-
         val priorities = handle.filePriorities()
-        val streamingFileIndex = streamingFileIndexes[torrentId]
+        val streamingIndex = streamingFileIndexes[torrentId]
         val arr = JSONArray()
 
         for (i in 0 until fs.numFiles()) {
             val size = fs.fileSize(i)
-            // If libtorrent still reports 0 for a non-IGNORE file, fall back to disk size.
-            var downloaded = fileProgress.getOrElse(i) { 0L }
             val relativePath = fs.filePath(i)
-            val absolutePath = File(saveDir, relativePath).absolutePath
-            if (downloaded == 0L && size > 0L) {
-                val diskSize = try { File(absolutePath).length() } catch (_: Exception) { 0L }
-                if (diskSize > 0L) downloaded = diskSize.coerceAtMost(size)
-            }
-            if (i == streamingFileIndex) {
-                downloaded = streamingBufferedBytes(handle, fs, i).coerceAtMost(size)
-            }
-            val priority = priorities.getOrNull(i)?.let(::mapPriority) ?: "normal"
-            val progress = if (size > 0L) downloaded.toDouble() / size.toDouble() else 0.0
-            val contiguous = if (i == streamingFileIndex) {
-                contiguousDownloadedBytes(handle, fs, i).coerceAtMost(size)
-            } else {
-                downloaded
-            }
-
+            val downloaded = fileProgress.getOrElse(i) { 0L }.coerceIn(0L, size)
+            val contiguous = if (i == streamingIndex) contiguousBytes(handle, fs, i) else downloaded
             arr.put(
                 JSONObject()
                     .put("id", "$torrentId-$i")
+                    .put("index", i)
                     .put("name", File(relativePath).name)
-                    .put("path", absolutePath)
+                    .put("path", File(saveDir, relativePath).absolutePath)
                     .put("size", size)
                     .put("downloadedSize", downloaded)
                     .put("contiguousDownloadedSize", contiguous)
-                    .put("bufferedSize", downloaded)
-                    .put("progress", progress.coerceIn(0.0, 1.0))
-                    .put("priority", priority)
+                    .put("bufferedSize", contiguous)
+                    .put("progress", if (size > 0L) downloaded.toDouble() / size else 0.0)
+                    .put("priority", priorities.getOrNull(i)?.let(::mapPriority) ?: "normal")
             )
         }
-
         return arr
     }
 
-    private fun contiguousDownloadedBytes(
-        handle: TorrentHandle,
-        fs: FileStorage,
-        fileIndex: Int,
-    ): Long {
+    private fun contiguousBytes(handle: TorrentHandle, fs: FileStorage, fileIndex: Int): Long {
         val size = fs.fileSize(fileIndex)
-        if (size <= 0L) return 0L
-
         val startPiece = fs.pieceIndexAtFile(fileIndex)
         val endPiece = fs.lastPieceIndexAtFile(fileIndex)
-        if (startPiece < 0 || endPiece < startPiece) return 0L
-
-        var pieces = 0L
-        for (piece in startPiece..endPiece) {
-            val havePiece = try { handle.havePiece(piece) } catch (_: Exception) { false }
-            if (!havePiece) break
-            pieces++
-        }
-
-        if (pieces == 0L) return 0L
-        return (pieces * fs.pieceLength().toLong()).coerceAtMost(size)
-    }
-
-    private fun streamingBufferedBytes(
-        handle: TorrentHandle,
-        fs: FileStorage,
-        fileIndex: Int,
-    ): Long {
-        val size = fs.fileSize(fileIndex)
-        if (size <= 0L) return 0L
-
-        val startPiece = fs.pieceIndexAtFile(fileIndex)
-        val endPiece = fs.lastPieceIndexAtFile(fileIndex)
-        if (startPiece < 0 || endPiece < startPiece) return 0L
-
+        if (size <= 0L || startPiece < 0 || endPiece < startPiece) return 0L
         val pieceLength = fs.pieceLength().toLong()
-        val contiguous = contiguousDownloadedBytes(handle, fs, fileIndex)
-        val nextPiece = startPiece + (contiguous / pieceLength).toInt()
-        if (nextPiece > endPiece) return contiguous.coerceAtMost(size)
-
-        val partialPiece = try {
-            handle.getDownloadQueue().firstOrNull { it.pieceIndex() == nextPiece }
-        } catch (_: Exception) {
-            null
-        } ?: return contiguous.coerceAtMost(size)
-
-        val blocks = partialPiece.blocksInPiece().coerceAtLeast(1)
-        val bytesPerBlock = (pieceLength / blocks).coerceAtLeast(1L)
-        val partialBytes = partialPiece.finished().toLong() * bytesPerBlock
-        return (contiguous + partialBytes).coerceAtMost(size)
+        val fileOffset = fs.fileOffset(fileIndex)
+        var piece = startPiece
+        while (piece <= endPiece && (try { handle.havePiece(piece) } catch (_: Exception) { false })) piece++
+        if (piece == startPiece) return 0L
+        // Bytes of the file covered by the contiguous run of pieces.
+        return ((piece.toLong() * pieceLength) - fileOffset).coerceIn(0L, size)
     }
 
     private fun mapPriority(priority: Priority): String = when (priority) {
@@ -711,44 +525,43 @@ class TorrentEngine(context: Context) {
 
     private fun startPollLoop() {
         scope.launch {
-            Log.d(TAG, "Poll loop started on ${Thread.currentThread().name}")
+            var tick = 0
             while (isActive) {
-                // Poll at 1 s while active downloads exist; back off to 5 s otherwise
-                // to avoid draining battery when all torrents are completed/paused.
-                val hasActive = synchronized(lock) { idToHash.isNotEmpty() } &&
-                    session.stats().downloadRate() > 0
-                delay(if (hasActive) 1000L else 5000L)
+                val hasTorrents = synchronized(lock) { idToHash.isNotEmpty() }
+                delay(if (hasTorrents) 1000L else 3000L)
                 emitStatusForAllHandles()
+                // Periodically flush resume data for torrents that changed.
+                if (++tick % 30 == 0) saveModified()
+            }
+        }
+    }
+
+    private fun saveModified() {
+        synchronized(lock) {
+            for (hash in idToHash.values) {
+                try {
+                    val h = findByHash(hash) ?: continue
+                    if (h.needSaveResumeData()) h.saveResumeData(TorrentHandle.SAVE_INFO_DICT)
+                } catch (_: Exception) {
+                }
             }
         }
     }
 
     private fun emitStatusForAllHandles() {
         val payloads = synchronized(lock) {
-            // Iterate by torrentId → hash; obtain each handle fresh from the session.
-            // This avoids any dangling-pointer crash that would occur if we stored handles
-            // obtained from alert callbacks (those have swigCMemOwn = false and are freed
-            // together with the alert object by the GC).
             idToHash.mapNotNull { (id, hash) ->
                 try {
-                    if (hash.length != 40) return@mapNotNull null
-                    val handle = session.find(Sha1Hash.parseHex(hash)) ?: return@mapNotNull null
-                    if (!handle.isValid) return@mapNotNull null
-                    emitStatusJsonLocked(id, handle.status(), handle)
+                    val handle = findByHash(hash) ?: return@mapNotNull null
+                    statusJsonLocked(id, handle)
                 } catch (e: Exception) {
                     Log.e(TAG, "status error for $id: ${e.message}")
                     null
                 }
             }
         }
-        payloads.forEach { onUpdate?.invoke(it) }
-    }
-
-    private fun requestTorrentUpdates() {
-        try {
-            session.postTorrentUpdates()
-        } catch (_: Exception) {
-        }
+        val sink = onUpdate ?: return
+        payloads.forEach(sink)
     }
 
     private fun normalizeHash(hash: String): String = hash.trim().lowercase()
