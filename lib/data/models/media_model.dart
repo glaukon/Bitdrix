@@ -1,4 +1,5 @@
 import '../../core/constants/tmdb_constants.dart';
+import 'media_details.dart';
 
 /// Represents a movie or TV show returned by the TMDB API.
 class MediaModel {
@@ -19,6 +20,7 @@ class MediaModel {
     this.tagline,
     this.cast = const [],
     this.directors = const [],
+    this.details,
   });
 
   final int id;
@@ -59,6 +61,10 @@ class MediaModel {
 
   /// Directors for movies, creators for TV shows.
   final List<String> directors;
+
+  /// Everything else of the detail page (trailer, where to watch, seasons,
+  /// recommendations…); null outside `getDetails`.
+  final MediaDetails? details;
 
   // ── Getters ──────────────────────────────────────────────────────────────────
 
@@ -143,6 +149,9 @@ class MediaModel {
     final runtimes = json['episode_run_time'];
 
     return MediaModel(
+      details: json.containsKey('credits')
+          ? MediaDetails.fromJson(json, mediaType: mediaType, title: titleRaw)
+          : null,
       runtimeMinutes: (json['runtime'] as num?)?.toInt() ??
           (runtimes is List && runtimes.isNotEmpty
               ? (runtimes.first as num?)?.toInt()
@@ -238,6 +247,7 @@ class MediaModel {
       tagline: tagline,
       cast: cast,
       directors: directors,
+      details: details,
     );
   }
 }

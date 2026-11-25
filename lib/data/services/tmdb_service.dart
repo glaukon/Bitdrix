@@ -1,6 +1,7 @@
 import 'package:dio/dio.dart';
 
 import '../../core/constants/tmdb_constants.dart';
+import '../models/media_details.dart';
 import '../models/media_model.dart';
 
 /// Thrown when Discover is used before a TMDB credential is configured.
@@ -94,6 +95,19 @@ class TmdbService {
     return _parseResults(response.data, forceMediaType: mediaType);
   }
 
+  /// The episodes of one season of a TV show.
+  Future<List<Episode>> getSeasonEpisodes(int tvId, int season) async {
+    final response = await _dio.get(
+      '/tv/$tvId/season/$season',
+      queryParameters: {'language': _language},
+    );
+    final data = response.data as Map<String, dynamic>;
+    return [
+      for (final e in data['episodes'] as List<dynamic>? ?? [])
+        if (e is Map<String, dynamic>) Episode.fromJson(e, season),
+    ];
+  }
+
   /// Returns the IMDB identifier for a TMDB title.
   ///
   /// Returns `null` if the IMDB ID is not available.
@@ -117,8 +131,16 @@ class TmdbService {
       path,
       queryParameters: {
         'language': _language,
-        // Cast and director in the same request.
-        'append_to_response': 'credits',
+        // Everything the detail page shows, in one request.
+        'append_to_response': [
+          'credits',
+          'videos',
+          'recommendations',
+          'watch/providers',
+          mediaType == 'tv' ? 'content_ratings' : 'release_dates',
+        ].join(','),
+        // Trailers in Castilian, else in English.
+        'include_video_language': 'es,en',
       },
     );
     final json = response.data as Map<String, dynamic>;

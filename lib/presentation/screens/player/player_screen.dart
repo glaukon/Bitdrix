@@ -776,6 +776,7 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
     final preferred = ref.read(audioLanguagePreferenceProvider);
     final tracks = _player.state.tracks.audio;
     if (preferred.isAny) {
+      await _avoidUndecodableAudio();
       return _spanishScore(_player.state.track.audio.title,
               _player.state.track.audio.language) >
           0;
@@ -787,13 +788,51 @@ class _PlayerScreenState extends ConsumerState<PlayerScreen> {
             (track) => (track: track, score: _audioTrackPreferenceScore(track)))
         .where((entry) => entry.score > 0)
         .toList()
-      ..sort((a, b) => b.score.compareTo(a.score));
+      ..sort((a, b) {
+        // Same language: a track the player can decode goes first.
+        final byScore = b.score.compareTo(a.score);
+        if (byScore != 0) return byScore;
+        return (_undecodable(a.track) ? 1 : 0)
+            .compareTo(_undecodable(b.track) ? 1 : 0);
+      });
 
-    if (ranked.isEmpty) return false;
-    if (_player.state.track.audio != ranked.first.track) {
-      await _player.setAudioTrack(ranked.first.track);
+    if (ranked.isEmpty) {
+      await _avoidUndecodableAudio();
+      return false;
+    }
+    final best = ranked
+            .where((e) =>
+                e.score == ranked.first.score && !_undecodable(e.track))
+            .firstOrNull ??
+        ranked.first;
+    if (_player.state.track.audio != best.track) {
+      await _player.setAudioTrack(best.track);
     }
     return true;
+  }
+
+  /// Dolby TrueHD (and its MLP core) cannot be decoded by the bundled
+  /// libmpv: such a track plays silent.
+  static bool _undecodable(AudioTrack track) {
+    final codec = (track.codec ?? '').toLowerCase();
+    return codec.contains('truehd') || codec == 'mlp';
+  }
+
+  /// When the playing track is one the player cannot decode, switch to
+  /// another of the same language (or any decodable one).
+  Future<void> _avoidUndecodableAudio() async {
+    final current = _player.state.track.audio;
+    final real = _player.state.tracks.audio
+        .where((t) => t.id != 'auto' && t.id != 'no')
+        .toList();
+    final playing = real.where((t) => t.id == current.id).firstOrNull ??
+        (current.id == 'auto' ? real.firstOrNull : null);
+    if (playing == null || !_undecodable(playing)) return;
+    final alternative = real
+            .where((t) => !_undecodable(t) && t.language == playing.language)
+            .firstOrNull ??
+        real.where((t) => !_undecodable(t)).firstOrNull;
+    if (alternative != null) await _player.setAudioTrack(alternative);
   }
 
   /// Applies the subtitle setting unless the user already picked a track:

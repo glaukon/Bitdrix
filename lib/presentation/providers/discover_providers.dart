@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../data/models/app_language.dart';
+import '../../data/models/media_details.dart';
 import '../../data/models/media_model.dart';
 import '../../data/models/stream_source_model.dart';
 import '../../data/services/tmdb_service.dart';
@@ -88,6 +89,13 @@ final mediaDetailProvider =
   final (tmdbId, mediaType) = args;
   return ref.watch(tmdbServiceProvider).getDetails(tmdbId, mediaType);
 });
+
+/// Episodes of one season: (TMDB show id, season number).
+final seasonEpisodesProvider =
+    FutureProvider.autoDispose.family<List<Episode>, (int, int)>(
+  (ref, args) =>
+      ref.watch(tmdbServiceProvider).getSeasonEpisodes(args.$1, args.$2),
+);
 
 // ── Stream sources ────────────────────────────────────────────────────────────
 

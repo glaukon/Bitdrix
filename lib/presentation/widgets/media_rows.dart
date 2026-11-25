@@ -42,20 +42,22 @@ class MediaRow extends StatelessWidget {
   final List<MediaModel>? items;
 
   static const posterHeight = kRowCardWidth * 3 / 2;
-  static const rowHeight = posterHeight + 44;
 
   @override
   Widget build(BuildContext context) {
     final items = this.items;
+    // Room for a two-line title, at whatever text size the page uses.
+    final rowHeight =
+        posterHeight + MediaQuery.textScalerOf(context).scale(44);
     if (items != null && items.isEmpty) return const SizedBox.shrink();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         RowTitle(title),
         items == null
-            ? const SizedBox(
+            ? SizedBox(
                 height: rowHeight,
-                child: Center(
+                child: const Center(
                   child: CircularProgressIndicator(color: AppTheme.primary),
                 ),
               )

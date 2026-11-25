@@ -3,8 +3,13 @@ class AppConstants {
   AppConstants._();
 
   // App info
-  static const String appName = 'Bitdrix';
+  static const String appName = 'BitDrix';
+  /// Keep in step with `version:` in pubspec.yaml (a test checks it): the
+  /// update check compares it with the latest GitHub release.
   static const String appVersion = '1.0.0';
+
+  /// GitHub repository whose releases carry the updates.
+  static const String githubRepo = 'glaukon/Bitdrix';
 
   // Navigation routes
   static const String routeHome = '/';

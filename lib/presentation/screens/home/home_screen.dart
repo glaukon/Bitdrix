@@ -98,36 +98,12 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
 
   PreferredSizeWidget _buildAppBar() {
     return AppBar(
-      title: Row(
-        children: [
-          Container(
-            width: 32,
-            height: 32,
-            decoration: BoxDecoration(
-              gradient: const LinearGradient(
-                colors: [AppTheme.primary, AppTheme.accent],
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-              ),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: const Icon(
-              Icons.play_arrow_rounded,
-              color: Colors.white,
-              size: 20,
-            ),
-          ),
-          const SizedBox(width: 10),
-          const Text(
-            AppConstants.appName,
-            style: TextStyle(
-              color: AppTheme.onBackground,
-              fontSize: 22,
-              fontWeight: FontWeight.w800,
-              letterSpacing: 1.5,
-            ),
-          ),
-        ],
+      // The BitDrix logo (from the brand pack: white text, for dark UI).
+      title: Image.asset(
+        'assets/images/bitdrix_logo.png',
+        height: 30,
+        filterQuality: FilterQuality.medium,
+        semanticLabel: AppConstants.appName,
       ),
       actions: [
         IconButton(
